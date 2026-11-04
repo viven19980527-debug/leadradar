@@ -17,7 +17,7 @@ import os
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROJ = "LeadRadar"
-FILES = ["LDRadar.swift", "LDWeb.swift", "LDViews.swift"]
+FILES = ["LDRadar.swift", "LDProtocol.swift", "LDWeb.swift", "LDViews.swift"]
 PLIST = "Info.plist"
 ASSET = "Assets.xcassets"
 BUNDLE_ID = "com.lab.leadradar"

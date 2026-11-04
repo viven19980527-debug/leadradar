@@ -27,6 +27,17 @@ enum Platform: String, CaseIterable, Identifiable {
     }
     var native: Bool { self == .bilibili }
 
+    /// 协议解析器使用的平台标识
+    var protocolKey: String {
+        switch self {
+        case .douyin:   return "douyin"
+        case .xhs:      return "xhs"
+        case .weibo:    return "weibo"
+        case .kuaishou: return "kuaishou"
+        case .bilibili: return "bilibili"
+        }
+    }
+
     /// 评论节点的 CSS 选择器（按优先级，取第一个有结果的）
     var domSelectors: String {
         let list: [String]
@@ -229,27 +240,62 @@ struct WebGrabber: UIViewRepresentable {
                   let body = dict["b"] as? String else { return }
             // 只关心像评论/搜索结果的接口
             guard body.count > 200, body.hasPrefix("{") || body.hasPrefix("[") else { return }
-            guard let data = body.data(using: .utf8),
-                  let json = try? JSONSerialization.jsonObject(with: data) else { return }
 
-            let items = CommentParser.extract(json)
-            guard !items.isEmpty else { return }
+            // 协议级解析：端点白名单 → 打分兜底 → 分页三层合并 → 大整数保护
+            let text = body
+            var page: CapturePage?
+            do {
+                page = try LDProtocol.parse(body: text,
+                                            platform: parent.platform.protocolKey,
+                                            captureURL: url)
+            } catch CaptureError.unsupportedEndpoint(let ep) {
+                // 已知平台但端点不是评论接口 → 忽略（比如推荐流、用户信息接口）
+                self.parent.onLog("跳过非评论接口 \(ep)")
+                return
+            } catch CaptureError.businessError(let m) {
+                self.parent.onLog("接口业务错误：\(m)")
+                return
+            } catch {
+                // 端点未知时退回通用启发式
+                page = nil
+            }
+
+            let parsed: [CapturedComment]
+            if let pg = page, !pg.comments.isEmpty {
+                parsed = pg.comments
+                if pg.hasMore || !pg.cursor.isEmpty {
+                    self.parent.onLog("分页：cursor=\(pg.cursor.prefix(16)) hasMore=\(pg.hasMore) total=\(pg.total)")
+                }
+            } else {
+                // 兜底：老逻辑（结构未知的 JSON）
+                let anyJSON = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) ?? [String: Any]()
+                let items = CommentParser.extract(anyJSON)
+                parsed = items.map {
+                    CapturedComment(id: $0.uid + "_" + String($0.text.prefix(20)),
+                                    parentID: "", userID: $0.uid, name: $0.name,
+                                    handle: "", text: $0.text, likeCount: 0,
+                                    createTime: "", sourceID: "", sourceURL: "")
+                }
+            }
 
             var batch: [Lead] = []
-            for it in items {
-                let key = "\(it.uid)_\(it.text.prefix(24))"
+            for it in parsed {
+                let key = it.id.isEmpty ? String(it.text.prefix(24)) : it.id
                 if seen.contains(key) { continue }
                 seen.insert(key)
                 let (score, tags, contact) = RadarScorer.score(it.text, industry: "空调/家电")
                 guard score > 0 else { continue }
                 batch.append(Lead(platform: parent.platform.rawValue,
-                                  uid: it.uid, name: it.name,
-                                  profileURL: it.profile,
+                                  uid: it.userID.isEmpty ? it.name : it.userID,
+                                  name: it.name,
+                                  profileURL: it.sourceURL.isEmpty ? "" : it.sourceURL,
                                   text: it.text, comments: 1, score: score,
                                   tags: tags, contact: contact,
                                   postTitle: parent.keyword,
-                                  videoURL: url, createdAt: 0))
+                                  videoURL: it.sourceURL,
+                                  createdAt: 0))
             }
+
             if !batch.isEmpty {
                 let n = batch.count
                 DispatchQueue.main.async { self.parent.onBatch(batch) }
