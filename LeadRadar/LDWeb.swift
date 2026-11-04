@@ -28,6 +28,8 @@ enum Platform: String, CaseIterable, Identifiable {
         }
     }
 
+    var usesHoumen: Bool { houmenKey != nil }
+
     func searchURL(_ kw: String) -> String {
         let e = kw.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? kw
         switch self {
@@ -330,7 +332,6 @@ struct HoumenCollector: UIViewRepresentable {
               return JSON.stringify(out);
             })();
             """
-            js(js) { _ in }
             webView?.evaluateJavaScript(js) { [weak self] result, _ in
                 guard let self, let s = result as? String,
                       let d = s.data(using: .utf8),
