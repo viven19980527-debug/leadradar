@@ -132,7 +132,7 @@ struct RadarRoot: View {
                             .foregroundStyle(enabledPlatforms.contains(p) ? Color.blue : Color.secondary)
                         Text(p.name)
                         Spacer()
-                        Text(p.native ? "原生" : "内置浏览器")
+                        Text(p.native ? "原生" : (p.usesHoumen ? "houmen 引擎" : "内置浏览器"))
                             .font(.caption2).foregroundStyle(.secondary)
                     }
                 }
@@ -636,8 +636,10 @@ struct WebCollectSheet: View {
     @ViewBuilder
     private var browser: some View {
         if started {
-            WebGrabber(platform: platform, keyword: keyword,
+            HoumenCollector(platform: platform, keyword: keyword,
+                       target: 50,
                        startURL: useLogin ? platform.loginURL : nil,
+                       drive: !useLogin,
                        running: $running,
                        onBatch: { batch in
                            shown += batch.count
@@ -646,8 +648,10 @@ struct WebCollectSheet: View {
                        onLog: onLog)
             .id(reloadKey)
         } else {
-            WebGrabber(platform: platform, keyword: keyword,
+            HoumenCollector(platform: platform, keyword: keyword,
+                       target: 50,
                        startURL: useLogin ? platform.loginURL : nil,
+                       drive: false,
                        running: .constant(false),
                        onBatch: { _ in },
                        onLog: { _ in })
