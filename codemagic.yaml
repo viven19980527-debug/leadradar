@@ -1,0 +1,61 @@
+# Codemagic build config (ASCII comments only, to avoid encoding issues)
+#
+# Workflow "ios-unsigned": builds an UNSIGNED .ipa on a macOS M2 runner.
+# We sign locally with zsign + our Ad Hoc provisioning profile, so no
+# Apple credentials need to live in Codemagic.
+#
+# Artifact: build/ipa/TrackerSweep-unsigned.ipa
+
+workflows:
+  ios-unsigned:
+    name: iOS unsigned IPA
+    instance_type: mac_mini_m2
+    max_build_duration: 40
+
+    environment:
+      xcode: latest
+      vars:
+        XCODE_PROJECT: "TrackerSweep.xcodeproj"
+        XCODE_SCHEME: "TrackerSweep"
+
+    scripts:
+      - name: Toolchain info
+        script: |
+          xcodebuild -version
+          xcodebuild -showsdks | grep -i iphoneos || true
+
+      - name: Verify project structure
+        script: |
+          python3 tools/check_pbxproj.py
+
+      - name: Build unsigned
+        script: |
+          set -o pipefail
+          xcodebuild \
+            -project "$XCODE_PROJECT" \
+            -scheme "$XCODE_SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build 2>&1 | tee build.log
+          echo "----- compiler errors (if any) -----"
+          grep -nE "error:" build.log || echo "(no error)"
+
+      - name: Package IPA
+        script: |
+          APP_PATH=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" | head -1)
+          echo "app: $APP_PATH"
+          test -n "$APP_PATH"
+          mkdir -p build/ipa/Payload
+          cp -R "$APP_PATH" build/ipa/Payload/
+          cd build/ipa
+          zip -qry TrackerSweep-unsigned.ipa Payload
+          ls -l TrackerSweep-unsigned.ipa
+          shasum -a 256 TrackerSweep-unsigned.ipa
+
+    artifacts:
+      - build/ipa/TrackerSweep-unsigned.ipa
+      - build.log

@@ -1,0 +1,41 @@
+name: TrackerSweep
+options:
+  bundleIdPrefix: com.lab
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    ENABLE_BITCODE: NO
+
+targets:
+  TrackerSweep:
+    type: application
+    platform: iOS
+    sources:
+      - path: TrackerSweep
+        excludes:
+          - Info.plist
+    info:
+      path: TrackerSweep/Info.plist
+      properties:
+        CFBundleDisplayName: 反跟踪扫描
+        CFBundleShortVersionString: "1.0"
+        CFBundleVersion: "1"
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        NSBluetoothAlwaysUsageDescription: 扫描周边蓝牙广播，用于发现跟随你的定位器与追踪器
+        NSBluetoothPeripheralUsageDescription: 蓝牙外设模式用于校准
+        NSMotionUsageDescription: 读取磁力计，用于发现藏有磁铁的偷拍/窃听设备
+        NSLocationWhenInUseUsageDescription: 读取当前 Wi-Fi 信息需要定位权限（系统限制）
+        NSLocalNetworkUsageDescription: 检查本地网络是否被劫持
+        UIBackgroundModes:
+          - bluetooth-central
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.lab.trackersweep
+        TARGETED_DEVICE_FAMILY: "1"
+        CODE_SIGN_STYLE: Automatic

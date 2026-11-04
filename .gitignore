@@ -1,0 +1,35 @@
+# Xcode
+build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+*.xcworkspace/xcuserdata/
+*.xcarchive
+dist/
+
+# 编译产物
+*.ipa
+*.dSYM
+*.dSYM.zip
+Payload/
+*.mobileprovision
+*.p12
+
+# Python
+__pycache__/
+*.pyc
+
+# 系统
+.DS_Store
+Thumbs.db
+
+# 本地配置（别把 team id / 证书提交上来）
+ExportOptions.generated.plist
+
+# 签名材料（永远别提交）
+*.key
+*.csr
+*.certSigningRequest
+*.cer
+*.pem
+*.p12
