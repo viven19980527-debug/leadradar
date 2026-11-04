@@ -1,34 +1,43 @@
 import SwiftUI
-import UniformTypeIdentifiers
 
-@main
-struct LeadRadarApp: App {
-    var body: some Scene {
-        WindowGroup { RadarRoot() }
-    }
-}
+// MARK: - 全平台聚合视图（替换原 LDViews 里的 RadarRoot）
 
 struct RadarRoot: View {
     @StateObject var client = BiliClient()
+
     @AppStorage("industry") var industry = "空调/家电"
     @AppStorage("lastKeyword") var lastKeyword = ""
+    @AppStorage("platforms") var platformsRaw = "bilibili"
     @State var keyword = ""
     @State var minScore = 0
     @State var showCSV = false
+    @State var webPlatform: Platform? = nil
+    @State var webRunning = false
+    @State var logs: [String] = []
+    @State var allLeads: [Lead] = []
+    @State var groupMode = 0        // 0=平台 1=标签
+
+    var enabledPlatforms: [Platform] {
+        Platform.allCases.filter { platformsRaw.contains($0.rawValue) }
+    }
 
     var filtered: [Lead] {
-        client.leads.filter { $0.score >= minScore }
+        allLeads.filter { $0.score >= minScore }
     }
 
     var body: some View {
         NavigationStack {
             List {
                 searchSection
-                if client.running { progressSection }
-                if !client.errorText.isEmpty { errorSection }
+                platformSection
+                if !logs.isEmpty { logSection }
                 if !filtered.isEmpty { resultSection }
-                if !client.running && filtered.isEmpty && !client.errorText.isEmpty {
-                    EmptyView()
+                if filtered.isEmpty && logs.isEmpty && client.errorText.isEmpty {
+                    Section {
+                        ContentUnavailableView("还没有线索",
+                                               systemImage: "antenna.radiowaves.left.and.right",
+                                               description: Text("输入关键词，勾选平台，点「一键全平台采集」"))
+                    }
                 }
             }
             .listStyle(.insetGrouped)
@@ -41,102 +50,170 @@ struct RadarRoot: View {
                             Text("音响/影音").tag("音响/影音")
                         }
                         Button("导出 CSV") { showCSV = true }
-                    } label: {
-                        Image(systemName: "line.3.horizontal.decrease.circle")
-                    }
+                        Button("清空结果") { allLeads = []; logs = [] }
+                    } label: { Image(systemName: "ellipsis.circle") }
                 }
             }
-            .sheet(isPresented: $showCSV) {
-                ShareSheet(items: [csvURL()])
+            .sheet(isPresented: $showCSV) { ShareSheet(items: [csvURL()]) }
+            .sheet(item: $webPlatform) { p in
+                WebCollectSheet(platform: p, keyword: keyword,
+                                running: $webRunning,
+                                onBatch: { batch in merge(batch) },
+                                onLog: { logs.append($0) })
             }
         }
-        .onAppear {
-            if keyword.isEmpty { keyword = lastKeyword }
-        }
+        .onAppear { if keyword.isEmpty { keyword = lastKeyword } }
     }
 
-    // MARK: 搜索区
+    // MARK: 搜索
 
     private var searchSection: some View {
         Section {
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("输入关键词实时抓取，如：空调安装多少钱", text: $keyword)
+                TextField("关键词，如：空调安装多少钱", text: $keyword)
                     .submitLabel(.search)
-                    .onSubmit { run() }
-                if !keyword.isEmpty {
-                    Button { keyword = "" } label: {
-                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                }
+                    .onSubmit { runAll() }
             }
-            Button {
-                run()
-            } label: {
+            Button { runAll() } label: {
                 HStack {
-                    Image(systemName: "antenna.radiowaves.left.and.right")
-                    Text(client.running ? "抓取中…" : "实时抓取")
+                    Image(systemName: "bolt.horizontal.circle.fill")
+                    Text(webRunning || client.running ? "采集中…" : "一键全平台采集")
+                        .font(.headline)
                     Spacer()
-                    if client.running { ProgressView() }
+                    if webRunning || client.running { ProgressView() }
                 }
-                .font(.headline)
             }
-            .disabled(client.running || keyword.trimmingCharacters(in: .whitespaces).isEmpty)
+            .disabled(webRunning || client.running || keyword.trimmingCharacters(in: .whitespaces).isEmpty)
 
             Picker("最低分", selection: $minScore) {
-                Text("全部").tag(0)
-                Text("50+").tag(50)
-                Text("70+").tag(70)
-                Text("80+").tag(80)
-            }
-            .pickerStyle(.segmented)
+                Text("全部").tag(0); Text("50+").tag(50); Text("70+").tag(70); Text("80+").tag(80)
+            }.pickerStyle(.segmented)
         } footer: {
-            Text("直连 B 站公开接口，从你输入的关键词开始搜视频、抓评论、现算意向分。不经过任何服务器。")
+            Text("B站 走原生接口（无需登录）；微博/抖音/快手/小红书 用内置浏览器抓（首次可能需要在页面里登录一次）。")
                 .font(.caption2)
         }
     }
 
-    private var progressSection: some View {
-        Section {
-            VStack(alignment: .leading, spacing: 6) {
-                ProgressView(value: Double(client.scannedComments), total: Double(max(1, client.scannedComments + 30)))
-                    .progressViewStyle(.linear)
-                Text(client.progress).font(.caption.monospaced()).foregroundStyle(.secondary)
-                Text("已抓评论 \(client.scannedComments) 条 · 线索 \(client.leads.count) 条")
-                    .font(.caption2).foregroundStyle(.secondary)
+    private var platformSection: some View {
+        Section("平台") {
+            ForEach(Platform.allCases) { p in
+                Button {
+                    toggle(p)
+                } label: {
+                    HStack {
+                        Image(systemName: enabledPlatforms.contains(p) ? "checkmark.circle.fill" : "circle")
+                            .foregroundStyle(enabledPlatforms.contains(p) ? .blue : .secondary)
+                        Text(p.name)
+                        Spacer()
+                        Text(p.native ? "原生" : "内置浏览器")
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
+                }
+                .buttonStyle(.plain)
             }
         }
     }
 
-    private var errorSection: some View {
-        Section {
-            Text(client.errorText).font(.footnote).foregroundStyle(.orange)
+    private var logSection: some View {
+        Section("采集日志") {
+            ForEach(Array(logs.suffix(6).enumerated()), id: \.offset) { _, l in
+                Text(l).font(.caption2.monospaced()).foregroundStyle(.secondary)
+            }
+            if !client.progress.isEmpty {
+                Text(client.progress).font(.caption2.monospaced()).foregroundStyle(.blue)
+            }
         }
     }
 
     private var resultSection: some View {
-        Section("线索 \(filtered.count) 条") {
-            ForEach(filtered) { lead in
-                NavigationLink {
-                    LeadDetail(lead: lead)
-                } label: {
-                    LeadRow(lead: lead)
+        Group {
+            Picker("分组", selection: $groupMode) {
+                Text("按平台").tag(0); Text("按标签").tag(1)
+            }.pickerStyle(.segmented)
+
+            if groupMode == 0 {
+                ForEach(Platform.allCases) { p in
+                    let rows = filtered.filter { $0.platform == p.rawValue }
+                    if !rows.isEmpty {
+                        Section("\(p.name)（\(rows.count)）") {
+                            ForEach(rows) { lead in
+                                NavigationLink { LeadDetail(lead: lead) } label: { LeadRow(lead: lead) }
+                            }
+                        }
+                    }
+                }
+            } else {
+                let tagMap = Dictionary(grouping: filtered) { $0.tags.first ?? "其他" }
+                ForEach(tagMap.keys.sorted(), id: \.self) { tag in
+                    Section("\(tag)（\(tagMap[tag]!.count)）") {
+                        ForEach(tagMap[tag]!) { lead in
+                            NavigationLink { LeadDetail(lead: lead) } label: { LeadRow(lead: lead) }
+                        }
+                    }
                 }
             }
         }
     }
 
-    private func run() {
-        lastKeyword = keyword
-        Task { await client.search(keyword: keyword, pages: 2, industry: industry) }
+    // MARK: 动作
+
+    private func toggle(_ p: Platform) {
+        var set = Set(enabledPlatforms)
+        if set.contains(p) { set.remove(p) } else { set.insert(p) }
+        platformsRaw = set.map { $0.rawValue }.joined(separator: ",")
+    }
+
+    private func runAll() {
+        let kw = keyword.trimmingCharacters(in: .whitespaces)
+        guard !kw.isEmpty else { return }
+        lastKeyword = kw
+        allLeads = []
+        logs = []
+
+        // 1) B站：原生
+        if enabledPlatforms.contains(.bilibili) {
+            logs.append("B站：开始原生抓取…")
+            Task {
+                await client.search(keyword: kw, pages: 2, industry: industry)
+                merge(client.leads)
+                logs.append("B站：\(client.leads.count) 条线索")
+                // 2) 其它平台：依次用内置浏览器抓
+                for p in enabledPlatforms where !p.native {
+                    logs.append("\(p.name)：打开页面采集…")
+                    webPlatform = p
+                    // 等用户/自动滚动完成（WebCollectSheet 内部 40 秒收尾）
+                    try? await Task.sleep(nanoseconds: 45_000_000_000)
+                }
+            }
+        } else {
+            if let first = enabledPlatforms.first(where: { !$0.native }) {
+                webPlatform = first
+                logs.append("\(first.name)：打开页面采集…")
+            }
+        }
+    }
+
+    private func merge(_ batch: [Lead]) {
+        var map = Dictionary(uniqueKeysWithValues: allLeads.map { ($0.id, $0) })
+        for l in batch {
+            if var old = map[l.id] {
+                old.comments += l.comments
+                if l.score > old.score { old.score = l.score; old.text = l.text; old.tags = l.tags }
+                if !l.contact.isEmpty { old.contact = l.contact }
+                map[l.id] = old
+            } else {
+                map[l.id] = l
+            }
+        }
+        allLeads = map.values.sorted { $0.score > $1.score }
     }
 
     private func csvURL() -> URL {
-        var s = "昵称,UID,评分,标签,联系方式,评论,视频,主页\n"
+        var s = "平台,昵称,UID,评分,标签,联系方式,评论,来源\n"
         for l in filtered {
             let t = l.text.replacingOccurrences(of: "\"", with: "\"\"")
-            s += "\"\(l.name)\",\(l.uid),\(l.score),\"\(l.tags.joined(separator: "/"))\",\"\(l.contact)\",\"\(t)\",\"\(l.postTitle)\",\(l.profileURL)\n"
+            s += "\(l.platform),\"\(l.name)\",\(l.uid),\(l.score),\"\(l.tags.joined(separator: "/"))\",\"\(l.contact)\",\"\(t)\",\"\(l.postTitle)\"\n"
         }
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("leads.csv")
         try? ("\u{FEFF}" + s).write(to: url, atomically: true, encoding: .utf8)
@@ -144,85 +221,46 @@ struct RadarRoot: View {
     }
 }
 
-// MARK: - 行
+// MARK: - 内置浏览器采集面板
 
-struct LeadRow: View {
-    let lead: Lead
-    var color: Color {
-        lead.score >= 80 ? .red : lead.score >= 50 ? .orange : .secondary
-    }
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
-                Text("\(lead.score)")
-                    .font(.headline.monospacedDigit())
-                    .foregroundStyle(color)
-                Text(lead.name).font(.subheadline.weight(.medium)).lineLimit(1)
-                Spacer()
-                ForEach(lead.tags.prefix(2), id: \.self) { t in
-                    Text(t).font(.caption2)
-                        .padding(.horizontal, 6).padding(.vertical, 1)
-                        .background(Color.blue.opacity(0.15))
-                        .clipShape(Capsule())
-                }
-            }
-            Text(lead.text).font(.footnote).lineLimit(3).foregroundStyle(.primary.opacity(0.9))
-            HStack(spacing: 8) {
-                if !lead.contact.isEmpty {
-                    Label(lead.contact, systemImage: "phone.fill")
-                        .font(.caption2).foregroundStyle(.green)
-                }
-                Text("评论\(lead.comments)条").font(.caption2).foregroundStyle(.secondary)
-            }
-        }
-        .padding(.vertical, 2)
-    }
-}
+struct WebCollectSheet: View {
+    let platform: Platform
+    let keyword: String
+    @Binding var running: Bool
+    let onBatch: ([Lead]) -> Void
+    let onLog: (String) -> Void
+    @Environment(\.dismiss) var dismiss
+    @State private var shown = 0
 
-struct LeadDetail: View {
-    let lead: Lead
-    @Environment(\.openURL) var openURL
     var body: some View {
-        List {
-            Section {
+        NavigationStack {
+            VStack(spacing: 0) {
                 HStack {
-                    Text("\(lead.score)").font(.largeTitle.bold())
-                        .foregroundStyle(lead.score >= 80 ? .red : lead.score >= 50 ? .orange : .secondary)
-                    VStack(alignment: .leading) {
-                        Text(lead.name).font(.headline)
-                        Text(lead.tags.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
-                    }
+                    Text("\(platform.name)：\(keyword)").font(.footnote).lineLimit(1)
+                    Spacer()
+                    Text("\(shown) 条").font(.caption2).foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 12).padding(.vertical, 6)
+
+                WebGrabber(platform: platform, keyword: keyword, running: $running,
+                           onBatch: { batch in
+                               shown += batch.count
+                               onBatch(batch)
+                           },
+                           onLog: onLog)
+                .overlay(alignment: .bottom) {
+                    Text("自动滚动中…如需更多数据可在页面内登录后再采集")
+                        .font(.caption2).padding(6)
+                        .background(.thinMaterial)
                 }
             }
-            Section("评论原文") {
-                Text(lead.text).font(.body).textSelection(.enabled)
-            }
-            if !lead.contact.isEmpty {
-                Section("联系方式") {
-                    HStack {
-                        Text(lead.contact).font(.body.monospaced()).textSelection(.enabled)
-                        Spacer()
-                        Button("复制") { UIPasteboard.general.string = lead.contact }
-                    }
+            .navigationTitle(platform.name)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("完成") { dismiss() }
                 }
-            }
-            Section("来源") {
-                Text(lead.postTitle).font(.footnote)
-                Button("打开视频") { if let u = URL(string: lead.videoURL) { openURL(u) } }
-                Button("打开作者主页") { if let u = URL(string: lead.profileURL) { openURL(u) } }
             }
         }
-        .navigationTitle("线索详情")
-        .navigationBarTitleDisplayMode(.inline)
     }
-}
-
-// MARK: - 分享 CSV
-
-struct ShareSheet: UIViewControllerRepresentable {
-    let items: [Any]
-    func makeUIViewController(context: Context) -> UIActivityViewController {
-        UIActivityViewController(activityItems: items, applicationActivities: nil)
-    }
-    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
