@@ -43,15 +43,16 @@ struct RadarRoot: View {
             .listStyle(.insetGrouped)
             .navigationTitle("获客雷达")
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: .navigationBarTrailing) {
                     Menu {
-                        Picker("行业", selection: $industry) {
-                            Text("空调/家电").tag("空调/家电")
-                            Text("音响/影音").tag("音响/影音")
-                        }
+                        Button(industry == "空调/家电" ? "✓ 空调/家电" : "空调/家电") { industry = "空调/家电" }
+                        Button(industry == "音响/影音" ? "✓ 音响/影音" : "音响/影音") { industry = "音响/影音" }
+                        Divider()
                         Button("导出 CSV") { showCSV = true }
                         Button("清空结果") { allLeads = []; logs = [] }
-                    } label: { Image(systemName: "ellipsis.circle") }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                    }
                 }
             }
             .sheet(isPresented: $showCSV) { ShareSheet(items: [csvURL()]) }
