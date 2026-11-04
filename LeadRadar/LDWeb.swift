@@ -61,6 +61,7 @@ enum Platform: String, CaseIterable, Identifiable {
         case .weibo:    list = ["a[href*='/detail/']", "a[href*='/status/']", ".card a"]
         default:        list = ["a[href*='/video/']"]
         }
+        return "[" + list.map { "'" + $0 + "'" }.joined(separator: ",") + "]"
     }
 
     /// 评论节点选择器（DOM 兜底）
@@ -73,6 +74,7 @@ enum Platform: String, CaseIterable, Identifiable {
         case .weibo:    list = [".item-content", ".card .m-text-cut", ".comment"]
         default:        list = [".comment-item", ".reply-item"]
         }
+        return "[" + list.map { "'" + $0 + "'" }.joined(separator: ",") + "]"
     }
 }
 
