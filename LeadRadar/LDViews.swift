@@ -32,6 +32,7 @@ struct RadarRoot: View {
                 platformSection
                 if !logs.isEmpty { logSection }
                 if !filtered.isEmpty { resultSection }
+                settingsSection
                 if filtered.isEmpty && logs.isEmpty && client.errorText.isEmpty {
                     Section {
                         ContentUnavailableView("还没有线索",
@@ -42,19 +43,6 @@ struct RadarRoot: View {
             }
             .listStyle(.insetGrouped)
             .navigationTitle("获客雷达")
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Menu {
-                        Button(industry == "空调/家电" ? "✓ 空调/家电" : "空调/家电") { industry = "空调/家电" }
-                        Button(industry == "音响/影音" ? "✓ 音响/影音" : "音响/影音") { industry = "音响/影音" }
-                        Divider()
-                        Button("导出 CSV") { showCSV = true }
-                        Button("清空结果") { allLeads = []; logs = [] }
-                    } label: {
-                        Image(systemName: "ellipsis.circle")
-                    }
-                }
-            }
             .sheet(isPresented: $showCSV) { ShareSheet(items: [csvURL()]) }
             .sheet(item: $webPlatform) { p in
                 WebCollectSheet(platform: p, keyword: keyword,
@@ -64,6 +52,31 @@ struct RadarRoot: View {
             }
         }
         .onAppear { if keyword.isEmpty { keyword = lastKeyword } }
+    }
+
+    private var settingsSection: some View {
+        Section("设置与导出") {
+            HStack {
+                Text("行业词典")
+                Spacer()
+                Picker("", selection: $industry) {
+                    Text("空调/家电").tag("空调/家电")
+                    Text("音响/影音").tag("音响/影音")
+                }
+                .pickerStyle(.menu)
+            }
+            Button {
+                showCSV = true
+            } label: {
+                Label("导出 CSV（\(filtered.count) 条）", systemImage: "square.and.arrow.up")
+            }
+            Button(role: .destructive) {
+                allLeads = []
+                logs = []
+            } label: {
+                Label("清空结果", systemImage: "trash")
+            }
+        }
     }
 
     // MARK: 搜索
