@@ -35,9 +35,16 @@ struct RadarRoot: View {
                 settingsSection
                 if filtered.isEmpty && logs.isEmpty && client.errorText.isEmpty {
                     Section {
-                        ContentUnavailableView("还没有线索",
-                                               systemImage: "antenna.radiowaves.left.and.right",
-                                               description: Text("输入关键词，勾选平台，点「一键全平台采集」"))
+                        VStack(spacing: 8) {
+                            Image(systemName: "antenna.radiowaves.left.and.right")
+                                .font(.system(size: 34)).foregroundStyle(.secondary)
+                            Text("还没有线索").font(.headline)
+                            Text("输入关键词 → 勾选平台 → 一键全平台采集")
+                                .font(.caption).foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 24)
                     }
                 }
             }
