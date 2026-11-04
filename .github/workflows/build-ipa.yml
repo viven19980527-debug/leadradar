@@ -1,18 +1,19 @@
 name: build-ipa
 
-# 在没有 Mac 的情况下，用 GitHub 的 macOS 跑一次编译，产出未签名的 .ipa
-# 推上去就会自动跑；也可以在 Actions 页面点 "Run workflow" 手动触发。
-
 on:
   push:
     branches: ["**"]
   workflow_dispatch:
 
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     name: Build unsigned IPA
-    runs-on: macos-15
-    timeout-minutes: 30
+    runs-on: macos-14
+    timeout-minutes: 40
 
     steps:
       - name: Checkout
@@ -22,7 +23,6 @@ jobs:
         run: |
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version || true
-          xcodebuild -showsdks | grep -i iphoneos || true
 
       - name: Verify project structure
         run: python3 tools/check_pbxproj.py
@@ -40,32 +40,22 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             build 2>&1 | tee build.log
-          echo "----- 编译错误 -----"
-          grep -nE "(error|错误):" build.log || echo "(无 error)"
+          echo "----- errors -----"
+          grep -nE "error:" build.log || echo "(no error)"
 
       - name: Package IPA
         run: |
-          APP=build/Build/Products/Release-iphoneos/LeadRadar.app
-          test -d "$APP" || { echo "::error::没有产物，看上面 build.log 的报错"; exit 1; }
+          set -e
+          APP=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" | head -1)
+          echo "app: $APP"
           mkdir -p Payload
           cp -R "$APP" Payload/
           zip -qry LeadRadar-unsigned.ipa Payload
           ls -lh LeadRadar-unsigned.ipa
-          /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$APP/Info.plist" || true
 
-      - name: Upload IPA
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: LeadRadar-unsigned-ipa
           path: LeadRadar-unsigned.ipa
           if-no-files-found: error
-          retention-days: 14
-
-      - name: Upload build log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-log
-          path: build.log
-          if-no-files-found: ignore
-          retention-days: 7
