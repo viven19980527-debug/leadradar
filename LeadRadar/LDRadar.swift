@@ -212,16 +212,21 @@ final class BiliClient: ObservableObject {
         mixinKey = String((0..<32).map { arr[BiliClient.tab[$0]] })
     }
 
-    private func signed(_ params: [String: String]) -> String {
+    /// 生成带 wbi 签名的完整 URL（query 用 URLComponents 正确转义）
+    private func signedURL(_ base: String, _ params: [String: String]) -> URL? {
         var p = params
         p["wts"] = String(Int(Date().timeIntervalSince1970))
         let sorted = p.sorted { $0.key < $1.key }
-        let query = sorted.map { k, v in
-            let clean = v.filter { !"!'()*".contains($0) }
-            return "\(k)=\(clean.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? clean)"
-        }.joined(separator: "&")
-        let rid = md5(query + mixinKey)
-        return query + "&w_rid=" + rid
+            .map { ($0.key, $0.value.filter { !"!'()*".contains($0) }) }
+        // 签名用未转义的原始串
+        let raw = sorted.map { "\($0.0)=\($0.1)" }.joined(separator: "&")
+        let rid = md5(raw + mixinKey)
+
+        var comps = URLComponents(string: base)
+        var items = sorted.map { URLQueryItem(name: $0.0, value: $0.1) }
+        items.append(URLQueryItem(name: "w_rid", value: rid))
+        comps?.queryItems = items
+        return comps?.url
     }
 
     private func get(_ urlString: String) async throws -> [String: Any] {
@@ -247,9 +252,11 @@ final class BiliClient: ObservableObject {
 
             var vids: [Video] = []
             for page in 1...max(1, pages) {
-                let q = signed(["search_type": "video", "keyword": kw, "page": String(page),
-                                "page_size": "20", "order": "totalrank"])
-                let j = try await get("https://api.bilibili.com/x/web-interface/wbi/search/type?" + q)
+                guard let url = signedURL("https://api.bilibili.com/x/web-interface/wbi/search/type",
+                                          ["search_type": "video", "keyword": kw,
+                                           "page": String(page), "page_size": "20",
+                                           "order": "totalrank"]) else { break }
+                let j = try await get(url.absoluteString)
                 guard let data = j["data"] as? [String: Any],
                       let arr = data["result"] as? [[String: Any]] else { break }
                 for it in arr {
@@ -322,9 +329,11 @@ final class BiliClient: ObservableObject {
         }
 
         // 一级评论
-        let q = signed(["oid": aid, "type": "1", "mode": "3",
-                        "pagination_str": "{\"offset\":\"\"}", "plat": "1", "web_location": "1315875"])
-        let j = try await get("https://api.bilibili.com/x/v2/reply/wbi/main?" + q)
+        guard let cmtURL = signedURL("https://api.bilibili.com/x/v2/reply/wbi/main",
+                                     ["oid": aid, "type": "1", "mode": "3",
+                                      "pagination_str": "{\"offset\":\"\"}", "plat": "1",
+                                      "web_location": "1315875"]) else { return [] }
+        let j = try await get(cmtURL.absoluteString)
         let roots = ((j["data"] as? [String: Any])?["replies"] as? [[String: Any]]) ?? []
         roots.forEach(add)
 

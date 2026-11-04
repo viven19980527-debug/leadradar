@@ -61,7 +61,7 @@ struct RadarRoot: View {
             .listStyle(.insetGrouped)
             .navigationTitle("获客雷达")
             .sheet(isPresented: $showCSV) { ShareSheet(items: [csvURL()]) }
-            .sheet(item: $webPlatform) { p in
+            .sheet(item: $webPlatform, onDismiss: { openNextWeb() }) { p in
                 WebCollectSheet(platform: p, keyword: keyword,
                                 running: $webRunning,
                                 onBatch: { batch in merge(batch) },
@@ -211,27 +211,32 @@ struct RadarRoot: View {
         allLeads = []
         logs = []
 
-        // 1) B站：原生
+        // 待处理的 web 平台队列（按需逐个打开）
+        webQueue = enabledPlatforms.filter { !$0.native }
+        logs.append("待采集 web 平台：" + (webQueue.map { $0.name }.joined(separator: "、").isEmpty
+                    ? "无" : webQueue.map { $0.name }.joined(separator: "、")))
+
         if enabledPlatforms.contains(.bilibili) {
             logs.append("B站：开始原生抓取…")
             Task {
                 await client.search(keyword: kw, pages: 2, industry: industry)
                 merge(client.leads)
                 logs.append("B站：\(client.leads.count) 条线索")
-                // 2) 其它平台：依次用内置浏览器抓
-                for p in enabledPlatforms where !p.native {
-                    logs.append("\(p.name)：打开页面采集…")
-                    webPlatform = p
-                    // 等用户/自动滚动完成（WebCollectSheet 内部 40 秒收尾）
-                    try? await Task.sleep(nanoseconds: 45_000_000_000)
-                }
+                openNextWeb()
             }
         } else {
-            if let first = enabledPlatforms.first(where: { !$0.native }) {
-                webPlatform = first
-                logs.append("\(first.name)：打开页面采集…")
-            }
+            openNextWeb()
         }
+    }
+
+    private func openNextWeb() {
+        guard let next = webQueue.first else {
+            logs.append("全部平台采集结束，共 \(allLeads.count) 条线索")
+            return
+        }
+        webQueue.removeFirst()
+        logs.append("\(next.name)：请在弹出页面里「先登录 → 再点开始采集」")
+        webPlatform = next
     }
 
     private func merge(_ batch: [Lead]) {
@@ -261,7 +266,7 @@ struct RadarRoot: View {
     }
 }
 
-// MARK: - 内置浏览器采集面板
+// MARK: - 内置浏览器采集面板（先登录 → 再采集）
 
 struct WebCollectSheet: View {
     let platform: Platform
@@ -270,123 +275,70 @@ struct WebCollectSheet: View {
     let onBatch: ([Lead]) -> Void
     let onLog: (String) -> Void
     @Environment(\.dismiss) var dismiss
+
     @State private var shown = 0
+    @State private var started = false
+    @State private var reloadKey = UUID()
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                HStack {
-                    Text("\(platform.name)：\(keyword)").font(.footnote).lineLimit(1)
-                    Spacer()
-                    Text("\(shown) 条").font(.caption2).foregroundStyle(.secondary)
-                }
-                .padding(.horizontal, 12).padding(.vertical, 6)
+                banner
 
-                WebGrabber(platform: platform, keyword: keyword, running: $running,
-                           onBatch: { batch in
-                               shown += batch.count
-                               onBatch(batch)
-                           },
-                           onLog: onLog)
-                .overlay(alignment: .bottom) {
-                    Text("自动滚动中…如需更多数据可在页面内登录后再采集")
-                        .font(.caption2).padding(6)
-                        .background(.thinMaterial)
+                if started {
+                    WebGrabber(platform: platform, keyword: keyword, running: $running,
+                               onBatch: { batch in
+                                   shown += batch.count
+                                   onBatch(batch)
+                               },
+                               onLog: onLog)
+                        .id(reloadKey)
+                } else {
+                    // 未开始采集时，只显示网页供登录/浏览
+                    WebGrabber(platform: platform, keyword: keyword, running: .constant(false),
+                               onBatch: { _ in },
+                               onLog: { _ in })
+                        .id(reloadKey)
                 }
             }
-            .navigationTitle(platform.name)
+            .navigationTitle("\(platform.name) · \(keyword)")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("完成") { dismiss() }
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("重新加载") { reloadKey = UUID() }
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button(started ? "完成" : "开始采集") {
+                        if started {
+                            dismiss()
+                        } else {
+                            started = true
+                            reloadKey = UUID()
+                            onLog("\(platform.name)：开始采集（自动滚动 + 抓接口）")
+                        }
+                    }
+                    .bold()
                 }
             }
         }
     }
-}
 
-
-// MARK: - 行 / 详情 / 分享
-
-struct LeadRow: View {
-    let lead: Lead
-    var color: Color {
-        lead.score >= 80 ? .red : lead.score >= 50 ? .orange : .secondary
-    }
-    var body: some View {
+    private var banner: some View {
         VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
-                Text("\(lead.score)")
-                    .font(.headline.monospacedDigit())
-                    .foregroundStyle(color)
-                Text(lead.name).font(.subheadline.weight(.medium)).lineLimit(1)
-                Spacer()
-                ForEach(lead.tags.prefix(2), id: \.self) { t in
-                    Text(t).font(.caption2)
-                        .padding(.horizontal, 6).padding(.vertical, 1)
-                        .background(Color.blue.opacity(0.15))
-                        .clipShape(Capsule())
-                }
-            }
-            Text(lead.text).font(.footnote).lineLimit(3).foregroundStyle(.primary.opacity(0.9))
-            HStack(spacing: 8) {
-                if !lead.contact.isEmpty {
-                    Label(lead.contact, systemImage: "phone.fill")
-                        .font(.caption2).foregroundStyle(.green)
-                }
-                Text(lead.postTitle).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+            if started {
+                Text("采集中：自动滚动页面并抓取接口数据 · 已捕获 \(shown) 条")
+                    .font(.caption)
+            } else {
+                Text("第 1 步：在下方页面登录/浏览（很多平台不登录看不到评论）")
+                    .font(.caption).bold()
+                Text("第 2 步：点右上角「开始采集」，自动滚动并抓取")
+                    .font(.caption)
+                Text("提示：微博/抖音/快手/小红书建议先在页面内登录一次，cookie 会保留。")
+                    .font(.caption2).foregroundStyle(.secondary)
             }
         }
-        .padding(.vertical, 2)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .background(started ? Color.green.opacity(0.12) : Color.blue.opacity(0.12))
     }
-}
-
-struct LeadDetail: View {
-    let lead: Lead
-    @Environment(\.openURL) var openURL
-    var body: some View {
-        List {
-            Section {
-                HStack {
-                    Text("\(lead.score)").font(.largeTitle.bold())
-                        .foregroundStyle(lead.score >= 80 ? .red : lead.score >= 50 ? .orange : .secondary)
-                    VStack(alignment: .leading) {
-                        Text(lead.name).font(.headline)
-                        Text(lead.tags.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-            }
-            Section("评论原文") {
-                Text(lead.text).font(.body).textSelection(.enabled)
-            }
-            if !lead.contact.isEmpty {
-                Section("联系方式") {
-                    HStack {
-                        Text(lead.contact).font(.body.monospaced()).textSelection(.enabled)
-                        Spacer()
-                        Button("复制") { UIPasteboard.general.string = lead.contact }
-                    }
-                }
-            }
-            Section("来源") {
-                Text(lead.postTitle).font(.footnote)
-                if !lead.profileURL.isEmpty {
-                    Button("打开作者主页") { if let u = URL(string: lead.profileURL) { openURL(u) } }
-                }
-                if !lead.videoURL.isEmpty {
-                    Button("打开来源页面") { if let u = URL(string: lead.videoURL) { openURL(u) } }
-                }
-            }
-        }
-        .navigationTitle("线索详情")
-        .navigationBarTitleDisplayMode(.inline)
-    }
-}
-
-struct ShareSheet: UIViewControllerRepresentable {
-    let items: [Any]
-    func makeUIViewController(context: Context) -> UIActivityViewController {
-        UIActivityViewController(activityItems: items, applicationActivities: nil)
-    }
-    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
