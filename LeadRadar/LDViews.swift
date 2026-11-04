@@ -1,4 +1,14 @@
 import SwiftUI
+import UniformTypeIdentifiers
+
+@main
+struct LeadRadarApp: App {
+    var body: some Scene {
+        WindowGroup { RadarRoot() }
+    }
+}
+
+import SwiftUI
 
 // MARK: - 全平台聚合视图（替换原 LDViews 里的 RadarRoot）
 
