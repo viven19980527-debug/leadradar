@@ -2,96 +2,31 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleDevelopmentRegion</key>
-    <string>zh_CN</string>
-    <key>CFBundleDisplayName</key>
-    <string>反跟踪扫描</string>
-    <key>CFBundleExecutable</key>
-    <string>$(EXECUTABLE_NAME)</string>
-    <key>CFBundleIdentifier</key>
-    <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
-    <key>CFBundleInfoDictionaryVersion</key>
-    <string>6.0</string>
-    <key>CFBundleName</key>
-    <string>$(PRODUCT_NAME)</string>
-    <key>CFBundlePackageType</key>
-    <string>APPL</string>
-    <key>CFBundleShortVersionString</key>
-    <string>3.8</string>
-    <key>CFBundleVersion</key>
-    <string>38</string>
-    <key>LSRequiresIPhoneOS</key>
-    <true/>
-    <key>UILaunchScreen</key>
-    <dict/>
-    <key>UISupportedInterfaceOrientations</key>
-    <array>
-        <string>UIInterfaceOrientationPortrait</string>
-    </array>
-
-    <key>NSBluetoothAlwaysUsageDescription</key>
-    <string>扫描周边蓝牙广播，用于发现跟随你的定位器与追踪器</string>
-    <key>NSBluetoothPeripheralUsageDescription</key>
-    <string>蓝牙外设模式用于设备校准</string>
-    <key>NSMotionUsageDescription</key>
-    <string>读取磁力计，用于发现藏有磁铁的偷拍/窃听设备</string>
-    <key>NSLocationWhenInUseUsageDescription</key>
-    <string>读取当前 Wi-Fi 信息需要定位权限（系统限制）</string>
-    <key>NSLocalNetworkUsageDescription</key>
-    <string>检查本地网络连通性是否被劫持</string>
-
-    <key>NSMicrophoneUsageDescription</key>
-    <string>检测 15–24 kHz 超声波信标（隐藏追踪/唤醒信号）</string>
-
-    <key>NFCReaderUsageDescription</key>
-    <string>读取 NFC 标签 UID 并发送 ISO7816 指令</string>
-
-    <!-- ISO7816 需要声明允许选择的 AID，否则读卡会直接失败 -->
-    <key>com.apple.developer.nfc.readersession.iso7816.select-identifiers</key>
-    <array>
-        <string>A0000002471001</string>
-        <string>A000000003000000</string>
-        <string>A0000000031010</string>
-        <string>A0000000041010</string>
-        <string>A0000000650101</string>
-        <string>D2760000850101</string>
-        <string>D2760000850100</string>
-        <string>A0000005591010FFFFFFFF8900000100</string>
-        <string>F0010203040506</string>
-        <string>A000000306000000</string>
-    </array>
-
-    <!-- Bonjour 浏览需要显式声明服务类型（iOS 14+） -->
-    <key>NSBonjourServices</key>
-    <array>
-        <string>_http._tcp</string>
-        <string>_https._tcp</string>
-        <string>_rtsp._tcp</string>
-        <string>_airplay._tcp</string>
-        <string>_raop._tcp</string>
-        <string>_googlecast._tcp</string>
-        <string>_hap._tcp</string>
-        <string>_ipp._tcp</string>
-        <string>_matter._tcp</string>
-        <string>_nvr._tcp</string>
-        <string>_onvif._tcp</string>
-        <string>_smb._tcp</string>
-        <string>_ssh._tcp</string>
-    </array>
-
-    <key>UIBackgroundModes</key>
-    <array>
-        <string>bluetooth-central</string>
-        <string>audio</string>
-    </array>
-
-    <!-- 内网设备是明文 HTTP（192.168.x.x），需要放开 ATS 才能抓指纹/试口令 -->
-    <key>NSAppTransportSecurity</key>
-    <dict>
-        <key>NSAllowsArbitraryLoads</key>
-        <true/>
-        <key>NSAllowsLocalNetworking</key>
-        <true/>
-    </dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>zh_CN</string>
+	<key>CFBundleDisplayName</key>
+	<string>获客雷达</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
+	<key>UILaunchScreen</key>
+	<dict/>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+	</array>
 </dict>
 </plist>
