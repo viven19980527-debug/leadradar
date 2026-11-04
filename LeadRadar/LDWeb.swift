@@ -27,6 +27,38 @@ enum Platform: String, CaseIterable, Identifiable {
     }
     var native: Bool { self == .bilibili }
 
+    /// 评论节点的 CSS 选择器（按优先级，取第一个有结果的）
+    var domSelectors: String {
+        let list: [String]
+        switch self {
+        case .douyin:
+            list = ["[data-e2e='comment-item']", ".comment-item", "[class*='commentItem']",
+                    "[class*='CommentItem']", ".rIYSC", ".comment"]
+        case .kuaishou:
+            list = [".comment-item", "[class*='comment']", ".kwai-comment", ".comment"]
+        case .xhs:
+            list = [".comment-item", ".comment-inner", "[class*='commentItem']",
+                    ".note-comment", ".comment"]
+        case .weibo:
+            list = [".comment-item", ".item-content", ".m-container-max .card9",
+                    ".card .m-text-cut", ".comment"]
+        default:
+            list = [".comment-item", ".reply-item", ".comment"]
+        }
+        return "[" + list.map { "'" + $0 + "'" }.joined(separator: ",") + "]"
+    }
+
+    /// 该平台的登录页（放进内置浏览器让用户登）
+    var loginURL: String {
+        switch self {
+        case .douyin:   return "https://www.douyin.com/"
+        case .kuaishou: return "https://www.kuaishou.com/"
+        case .xhs:      return "https://www.xiaohongshu.com/explore"
+        case .weibo:    return "https://passport.weibo.cn/signin/login"
+        case .bilibili: return "https://passport.bilibili.com/login"
+        }
+    }
+
     /// WebView 搜索页地址
     func searchURL(_ kw: String) -> String {
         let e = kw.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? kw
@@ -45,6 +77,7 @@ enum Platform: String, CaseIterable, Identifiable {
 struct WebGrabber: UIViewRepresentable {
     let platform: Platform
     let keyword: String
+    var startURL: String? = nil
     @Binding var running: Bool
     let onBatch: ([Lead]) -> Void
     let onLog: (String) -> Void
@@ -88,7 +121,7 @@ struct WebGrabber: UIViewRepresentable {
         wv.navigationDelegate = context.coordinator
         wv.allowsBackForwardNavigationGestures = false
         context.coordinator.webView = wv
-        if let url = URL(string: platform.searchURL(keyword)) {
+        if let url = URL(string: startURL ?? platform.searchURL(keyword)) {
             wv.load(URLRequest(url: url))
         }
         return wv
@@ -127,6 +160,7 @@ struct WebGrabber: UIViewRepresentable {
                 self.rounds += 1
                 if self.rounds > 14 { self.finish(); return }
                 wv.evaluateJavaScript("window.scrollTo(0, document.body.scrollHeight); 'ok'", completionHandler: nil)
+                self.scrapeDOM(wv)
                 // 打开第一条内容，触发评论接口
                 if self.rounds == 3 || self.rounds == 7 {
                     wv.evaluateJavaScript("""
@@ -136,6 +170,48 @@ struct WebGrabber: UIViewRepresentable {
                       return 'none';
                     })();
                     """, completionHandler: nil)
+                }
+            }
+        }
+
+        /// 从渲染后的 DOM 直接读评论文本（抓不到接口时的兜底）
+        private func scrapeDOM(_ wv: WKWebView) {
+            let js = """
+            (function(){
+              var sels = %@;
+              var out = [];
+              for (var i=0;i<sels.length;i++){
+                var nodes = document.querySelectorAll(sels[i]);
+                for (var j=0;j<nodes.length && out.length<120;j++){
+                  var t = (nodes[j].innerText||'').trim();
+                  if (t.length>4 && t.length<400) out.push(t);
+                }
+                if (out.length>0) break;
+              }
+              return JSON.stringify(out);
+            })();
+            """.replacingOccurrences(of: "%@", with: parent.platform.domSelectors)
+            wv.evaluateJavaScript(js) { [weak self] result, _ in
+                guard let self,
+                      let str = result as? String,
+                      let data = str.data(using: .utf8),
+                      let arr = try? JSONSerialization.jsonObject(with: data) as? [String] else { return }
+                var batch: [Lead] = []
+                for raw in arr {
+                    let key = String(raw.prefix(30))
+                    if self.seen.contains(key) { continue }
+                    self.seen.insert(key)
+                    let (score, tags, contact) = RadarScorer.score(raw, industry: "空调/家电")
+                    guard score > 0 else { continue }
+                    batch.append(Lead(platform: self.parent.platform.rawValue,
+                                      uid: key, name: String(raw.prefix(12)),
+                                      profileURL: "", text: raw, comments: 1,
+                                      score: score, tags: tags, contact: contact,
+                                      postTitle: self.parent.keyword, videoURL: "", createdAt: 0))
+                }
+                if !batch.isEmpty {
+                    DispatchQueue.main.async { self.parent.onBatch(batch) }
+                    self.parent.onLog("DOM 抓到 \(batch.count) 条")
                 }
             }
         }

@@ -236,7 +236,7 @@ final class BiliClient: ObservableObject {
     }
 
     // MARK: 主流程：关键词 → 实时抓取
-    func search(keyword: String, pages: Int = 2, industry: String) async {
+    func search(keyword: String, pages: Int = 3, industry: String, target: Int = 50) async {
         let kw = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !kw.isEmpty else { return }
         running = true
@@ -305,6 +305,7 @@ final class BiliClient: ObservableObject {
                     }
                 }
                 leads = byAuthor.values.sorted { $0.score > $1.score }
+                if leads.count >= target { break }
             }
             progress = "完成：\(scannedComments) 条评论 → \(leads.count) 条线索"
         } catch {
@@ -340,7 +341,7 @@ final class BiliClient: ObservableObject {
         // 子评论（每页 20，可多页）
         for r in roots {
             guard let rpid = r["rpid"] as? Int else { continue }
-            for pn in 1...3 {
+            for pn in 1...4 {
                 let q2 = "type=1&oid=\(aid)&root=\(rpid)&pn=\(pn)&ps=20&sort=2"
                 let j2 = try await get("https://api.bilibili.com/x/v2/reply/reply?" + q2)
                 let reps = ((j2["data"] as? [String: Any])?["replies"] as? [[String: Any]]) ?? []
@@ -352,7 +353,7 @@ final class BiliClient: ObservableObject {
                 if pn * 20 >= total { break }
                 try? await Task.sleep(nanoseconds: 700_000_000)
             }
-            if out.count > 120 { break }
+            if out.count > 200 { break }
         }
         return out
     }

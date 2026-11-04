@@ -26,6 +26,7 @@ struct RadarRoot: View {
     @State var logs: [String] = []
     @State var allLeads: [Lead] = []
     @State var groupMode = 0
+    @AppStorage("target") var target = 50
 
     private var enabledPlatforms: [Platform] {
         Platform.allCases.filter { platformsRaw.contains($0.rawValue) }
@@ -188,6 +189,7 @@ struct RadarRoot: View {
                 }
                 .pickerStyle(.menu)
             }
+            Stepper("目标条数：\(target)", value: $target, in: 20...300, step: 10)
             Button { showCSV = true } label: {
                 Label("导出 CSV（\(filtered.count) 条）", systemImage: "square.and.arrow.up")
             }
@@ -236,9 +238,9 @@ struct RadarRoot: View {
         if enabledPlatforms.contains(.bilibili) {
             logs.append("B站：开始原生抓取…")
             Task {
-                await client.search(keyword: kw, pages: 2, industry: industry)
+                await client.search(keyword: kw, pages: 3, industry: industry, target: target)
                 merge(client.leads)
-                logs.append("B站：\(client.leads.count) 条线索")
+                logs.append("B站：\(client.leads.count) 条线索（目标 \(target)）")
                 openNextWeb()
             }
         } else {
@@ -405,6 +407,7 @@ struct WebCollectSheet: View {
     @State private var shown = 0
     @State private var started = false
     @State private var reloadKey = UUID()
+    @State private var useLogin = false
 
     var body: some View {
         NavigationStack {
@@ -416,7 +419,10 @@ struct WebCollectSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Button("重新加载") { reloadKey = UUID() }
+                    HStack(spacing: 12) {
+                        Button("登录") { useLogin = true; reloadKey = UUID() }
+                        Button("重新加载") { useLogin = false; reloadKey = UUID() }
+                    }
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button(started ? "完成" : "开始采集") {
@@ -437,7 +443,9 @@ struct WebCollectSheet: View {
     @ViewBuilder
     private var browser: some View {
         if started {
-            WebGrabber(platform: platform, keyword: keyword, running: $running,
+            WebGrabber(platform: platform, keyword: keyword,
+                       startURL: useLogin ? platform.loginURL : nil,
+                       running: $running,
                        onBatch: { batch in
                            shown += batch.count
                            onBatch(batch)
@@ -445,7 +453,9 @@ struct WebCollectSheet: View {
                        onLog: onLog)
             .id(reloadKey)
         } else {
-            WebGrabber(platform: platform, keyword: keyword, running: .constant(false),
+            WebGrabber(platform: platform, keyword: keyword,
+                       startURL: useLogin ? platform.loginURL : nil,
+                       running: .constant(false),
                        onBatch: { _ in },
                        onLog: { _ in })
             .id(reloadKey)
