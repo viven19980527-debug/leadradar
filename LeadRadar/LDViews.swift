@@ -144,16 +144,25 @@ struct RadarRoot: View {
                     }
                 }
             } else {
-                let tagMap = Dictionary(grouping: filtered) { $0.tags.first ?? "其他" }
-                ForEach(tagMap.keys.sorted(), id: \.self) { tag in
-                    Section("\(tag)（\(tagMap[tag]!.count)）") {
-                        ForEach(tagMap[tag]!) { lead in
+                ForEach(tagGroups, id: \.0) { pair in
+                    Section("\(pair.0)（\(pair.1.count)）") {
+                        ForEach(pair.1) { lead in
                             NavigationLink { LeadDetail(lead: lead) } label: { LeadRow(lead: lead) }
                         }
                     }
                 }
             }
         }
+    }
+
+    private var tagGroups: [(String, [Lead])] {
+        var map: [String: [Lead]] = [:]
+        for l in filtered {
+            let key = l.tags.first ?? "其他"
+            map[key, default: []].append(l)
+        }
+        return map.map { ($0.key, $0.value.sorted { $0.score > $1.score }) }
+                  .sorted { $0.1.count > $1.1.count }
     }
 
     // MARK: 动作
@@ -263,4 +272,90 @@ struct WebCollectSheet: View {
             }
         }
     }
+}
+
+
+// MARK: - 行 / 详情 / 分享
+
+struct LeadRow: View {
+    let lead: Lead
+    var color: Color {
+        lead.score >= 80 ? .red : lead.score >= 50 ? .orange : .secondary
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Text("\(lead.score)")
+                    .font(.headline.monospacedDigit())
+                    .foregroundStyle(color)
+                Text(lead.name).font(.subheadline.weight(.medium)).lineLimit(1)
+                Spacer()
+                ForEach(lead.tags.prefix(2), id: \.self) { t in
+                    Text(t).font(.caption2)
+                        .padding(.horizontal, 6).padding(.vertical, 1)
+                        .background(Color.blue.opacity(0.15))
+                        .clipShape(Capsule())
+                }
+            }
+            Text(lead.text).font(.footnote).lineLimit(3).foregroundStyle(.primary.opacity(0.9))
+            HStack(spacing: 8) {
+                if !lead.contact.isEmpty {
+                    Label(lead.contact, systemImage: "phone.fill")
+                        .font(.caption2).foregroundStyle(.green)
+                }
+                Text(lead.postTitle).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+            }
+        }
+        .padding(.vertical, 2)
+    }
+}
+
+struct LeadDetail: View {
+    let lead: Lead
+    @Environment(\.openURL) var openURL
+    var body: some View {
+        List {
+            Section {
+                HStack {
+                    Text("\(lead.score)").font(.largeTitle.bold())
+                        .foregroundStyle(lead.score >= 80 ? .red : lead.score >= 50 ? .orange : .secondary)
+                    VStack(alignment: .leading) {
+                        Text(lead.name).font(.headline)
+                        Text(lead.tags.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            Section("评论原文") {
+                Text(lead.text).font(.body).textSelection(.enabled)
+            }
+            if !lead.contact.isEmpty {
+                Section("联系方式") {
+                    HStack {
+                        Text(lead.contact).font(.body.monospaced()).textSelection(.enabled)
+                        Spacer()
+                        Button("复制") { UIPasteboard.general.string = lead.contact }
+                    }
+                }
+            }
+            Section("来源") {
+                Text(lead.postTitle).font(.footnote)
+                if !lead.profileURL.isEmpty {
+                    Button("打开作者主页") { if let u = URL(string: lead.profileURL) { openURL(u) } }
+                }
+                if !lead.videoURL.isEmpty {
+                    Button("打开来源页面") { if let u = URL(string: lead.videoURL) { openURL(u) } }
+                }
+            }
+        }
+        .navigationTitle("线索详情")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+struct ShareSheet: UIViewControllerRepresentable {
+    let items: [Any]
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: items, applicationActivities: nil)
+    }
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
