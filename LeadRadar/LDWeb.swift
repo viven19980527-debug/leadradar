@@ -285,15 +285,27 @@ struct WebGrabber: UIViewRepresentable {
                 seen.insert(key)
                 let (score, tags, contact) = RadarScorer.score(it.text, industry: "空调/家电")
                 guard score > 0 else { continue }
-                batch.append(Lead(platform: parent.platform.rawValue,
-                                  uid: it.userID.isEmpty ? it.name : it.userID,
-                                  name: it.name,
-                                  profileURL: it.sourceURL.isEmpty ? "" : it.sourceURL,
-                                  text: it.text, comments: 1, score: score,
-                                  tags: tags, contact: contact,
-                                  postTitle: parent.keyword,
-                                  videoURL: it.sourceURL,
-                                  createdAt: 0))
+                var lead = Lead(platform: parent.platform.rawValue,
+                                uid: it.userID.isEmpty ? it.name : it.userID,
+                                name: it.name,
+                                profileURL: it.sourceURL.isEmpty ? "" : it.sourceURL,
+                                text: it.text, comments: 1, score: score,
+                                tags: tags, contact: contact,
+                                postTitle: parent.keyword,
+                                videoURL: it.sourceURL,
+                                createdAt: 0)
+                lead.bio = it.bio
+                lead.avatar = it.avatar
+                lead.city = it.city
+                lead.isQuestion = QuestionDetector.isQuestion(it.text)
+
+                // B1：简介里的联系方式优先，加分
+                if let best = BioParser.best(BioParser.extract(it.bio)) {
+                    lead.contact = best
+                    lead.score = min(100, lead.score + 25)
+                    if !lead.tags.contains("简介有联系方式") { lead.tags.append("简介有联系方式") }
+                }
+                batch.append(lead)
             }
 
             if !batch.isEmpty {

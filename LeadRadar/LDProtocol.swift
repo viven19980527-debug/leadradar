@@ -22,6 +22,9 @@ struct CapturedComment {
     let createTime: String
     let sourceID: String
     let sourceURL: String
+    var bio: String = ""
+    var avatar: String = ""
+    var city: String = ""
 }
 
 struct CapturePage {
@@ -137,6 +140,9 @@ enum LDProtocol {
     private static let LIKE_KEYS  = ["digg_count", "like_count", "likeCount", "like", "liked_count"]
     private static let TIME_KEYS  = ["create_time", "createTime", "created_at", "time", "ctime"]
     private static let REPLY_KEYS = ["reply_comment", "replies", "sub_comments", "subComments"]
+    private static let BIO_KEYS   = ["signature", "sign", "desc", "description", "introduction", "bio"]
+    private static let AVATAR_KEYS = ["avatar", "avatar_url", "avatarUrl", "avatar_larger", "profile_image_url", "head_img"]
+    private static let CITY_KEYS  = ["ip_label", "ip_location", "ipLocation", "location", "region"]
 
     // MARK: 单条评论识别与映射
 
@@ -189,9 +195,23 @@ enum LDProtocol {
 
         if cid.isEmpty { cid = "\(uid)_\(text.prefix(24))" }
 
+        var bio = ""
+        for k in BIO_KEYS where !str(user[k]).isEmpty { bio = str(user[k]); break }
+        if bio.isEmpty { for k in BIO_KEYS where !str(item[k]).isEmpty { bio = str(item[k]); break } }
+
+        var avatar = ""
+        for k in AVATAR_KEYS where !str(user[k]).isEmpty { avatar = str(user[k]); break }
+        if avatar.isEmpty {
+            if let imgs = user["image_urls"] as? [String], let first = imgs.first { avatar = first }
+        }
+
+        var city = IPLocation.find(in: user)
+        if city.isEmpty { city = IPLocation.find(in: item) }
+
         return CapturedComment(id: cid, parentID: parentID, userID: uid, name: name,
                                handle: handle, text: text, likeCount: like,
-                               createTime: created, sourceID: sourceID, sourceURL: sourceURL)
+                               createTime: created, sourceID: sourceID, sourceURL: sourceURL,
+                               bio: bio, avatar: avatar, city: city)
     }
 
     // MARK: 打分兜底：在未知 JSON 里找评论数组

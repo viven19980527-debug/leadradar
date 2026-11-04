@@ -27,13 +27,26 @@ struct RadarRoot: View {
     @State var allLeads: [Lead] = []
     @State var groupMode = 0
     @AppStorage("target") var target = 50
+    @AppStorage("onlyQuestion") var onlyQuestion = false
+    @AppStorage("onlyContact") var onlyContact = false
+    @AppStorage("cityFilter") var cityFilter = ""
 
     private var enabledPlatforms: [Platform] {
         Platform.allCases.filter { platformsRaw.contains($0.rawValue) }
     }
 
     private var filtered: [Lead] {
-        allLeads.filter { $0.score >= minScore }
+        allLeads.filter { l in
+            guard l.score >= minScore else { return false }
+            if onlyQuestion && !l.isQuestion { return false }
+            if onlyContact && l.contact.isEmpty && l.ocrContact.isEmpty { return false }
+            if !cityFilter.isEmpty {
+                let c = l.city.isEmpty ? "" : l.city
+                if c.isEmpty { return false }
+                if !IPLocation.matches(c, cityFilter) { return false }
+            }
+            return true
+        }
     }
 
     private var tagGroups: [(String, [Lead])] {
@@ -53,6 +66,7 @@ struct RadarRoot: View {
                 platformSection
                 if !logs.isEmpty { logSection }
                 if !filtered.isEmpty { resultSection }
+                filterSection
                 settingsSection
                 if filtered.isEmpty && logs.isEmpty && client.errorText.isEmpty {
                     emptySection
@@ -175,6 +189,20 @@ struct RadarRoot: View {
             ForEach(pair.1) { lead in
                 NavigationLink { LeadDetail(lead: lead) } label: { LeadRow(lead: lead) }
             }
+        }
+    }
+
+    private var filterSection: some View {
+        Section("筛选") {
+            Toggle("只看提问者（吗/多少/求推荐…）", isOn: $onlyQuestion)
+            Toggle("只看有联系方式的", isOn: $onlyContact)
+            HStack {
+                Text("城市")
+                TextField("如：深圳（留空=不限）", text: $cityFilter)
+                    .multilineTextAlignment(.trailing)
+            }
+            Text("当前命中 \(filtered.count) / \(allLeads.count) 条")
+                .font(.caption2).foregroundStyle(.secondary)
         }
     }
 
@@ -307,6 +335,13 @@ struct LeadRow: View {
                     .foregroundStyle(color)
                 Text(lead.name).font(.subheadline.weight(.medium)).lineLimit(1)
                 Spacer()
+                if lead.isQuestion {
+                    Text("问")
+                        .font(.caption2.bold())
+                        .padding(.horizontal, 6).padding(.vertical, 1)
+                        .background(Color.orange.opacity(0.25))
+                        .clipShape(Capsule())
+                }
                 ForEach(lead.tags.prefix(2), id: \.self) { t in
                     Text(t).font(.caption2)
                         .padding(.horizontal, 6).padding(.vertical, 1)
@@ -323,6 +358,9 @@ struct LeadRow: View {
                     Label(lead.contact, systemImage: "phone.fill")
                         .font(.caption2).foregroundStyle(Color.green)
                 }
+                if !lead.city.isEmpty {
+                    Text(lead.city).font(.caption2).foregroundStyle(.secondary)
+                }
                 Text(lead.postTitle).font(.caption2)
                     .foregroundStyle(.secondary).lineLimit(1)
             }
@@ -336,35 +374,128 @@ struct LeadRow: View {
 struct LeadDetail: View {
     let lead: Lead
     @Environment(\.openURL) var openURL
+    @AppStorage("industry") var industry = "空调/家电"
+    @AppStorage("cityFilter") var cityFilter = ""
+
+    @State private var ocrText: String = ""
+    @State private var ocrContact: String = ""
+    @State private var ocrRunning = false
+    @State private var showScript = false
 
     private var scoreColor: Color {
         lead.score >= 80 ? .red : (lead.score >= 50 ? .orange : .secondary)
     }
 
+    private var effectiveContact: String {
+        if !ocrContact.isEmpty { return ocrContact }
+        if !lead.contact.isEmpty { return lead.contact }
+        return ""
+    }
+
     var body: some View {
         List {
+            // 分数 + 标签
             Section {
                 HStack {
                     Text("\(lead.score)").font(.largeTitle.bold()).foregroundStyle(scoreColor)
-                    VStack(alignment: .leading) {
+                    VStack(alignment: .leading, spacing: 2) {
                         Text(lead.name).font(.headline)
-                        Text(lead.tags.joined(separator: " · "))
-                            .font(.caption).foregroundStyle(.secondary)
+                        HStack(spacing: 4) {
+                            if lead.isQuestion {
+                                Text("提问者").font(.caption2.bold())
+                                    .padding(.horizontal, 6).padding(.vertical, 1)
+                                    .background(Color.orange.opacity(0.25)).clipShape(Capsule())
+                            }
+                            if !lead.city.isEmpty {
+                                Text(lead.city).font(.caption2)
+                                    .padding(.horizontal, 6).padding(.vertical, 1)
+                                    .background(Color.green.opacity(0.18)).clipShape(Capsule())
+                            }
+                        }
+                        if !lead.tags.isEmpty {
+                            Text(lead.tags.joined(separator: " · "))
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
                     }
                 }
             }
+
+            // D1/D2/D3 触达
+            Section("触达") {
+                if !effectiveContact.isEmpty {
+                    HStack {
+                        Text(effectiveContact).font(.body.monospaced()).textSelection(.enabled)
+                        Spacer()
+                        Button("复制") { ContactActions.copy(effectiveContact) }
+                    }
+                    if ContactActions.canCall(effectiveContact) {
+                        Button {
+                            ContactActions.call(effectiveContact)
+                        } label: { Label("直接拨号", systemImage: "phone.arrow.up.right.fill") }
+                    }
+                    if effectiveContact.hasPrefix("wechat") {
+                        Button {
+                            ContactActions.openWeChat(copying: ContactActions.phoneNumber(effectiveContact).isEmpty
+                                                      ? effectiveContact.components(separatedBy: ":").last ?? ""
+                                                      : ContactActions.phoneNumber(effectiveContact))
+                        } label: { Label("复制微信号并打开微信", systemImage: "message.fill") }
+                    }
+                } else {
+                    Text("这条还没有联系方式").font(.footnote).foregroundStyle(.secondary)
+                }
+
+                Button {
+                    showScript = true
+                } label: { Label("生成开场白话术", systemImage: "text.bubble.fill") }
+            }
+
+            // B1 简介
+            if !lead.bio.isEmpty {
+                Section("作者简介") {
+                    Text(lead.bio).font(.footnote).textSelection(.enabled)
+                    let hits = BioParser.extract(lead.bio)
+                    if !hits.isEmpty {
+                        ForEach(hits, id: \.label) { h in
+                            HStack {
+                                Text(h.label).font(.caption.monospaced())
+                                Spacer()
+                                Button("复制") { ContactActions.copy(h.value) }
+                                    .font(.caption)
+                            }
+                        }
+                    }
+                }
+            }
+
+            // B3 头像 OCR
+            Section("头像识别（离线 OCR）") {
+                if ocrRunning {
+                    HStack { ProgressView(); Text("识别中…").font(.footnote) }
+                } else if !ocrText.isEmpty {
+                    Text(ocrText).font(.caption.monospaced()).textSelection(.enabled)
+                    if !ocrContact.isEmpty {
+                        HStack {
+                            Text("发现：\(ocrContact)").font(.caption).foregroundStyle(.green)
+                            Spacer()
+                            Button("用它联系") {
+                                ContactActions.copy(ocrContact)
+                            }.font(.caption)
+                        }
+                    }
+                }
+                Button {
+                    runOCR()
+                } label: {
+                    Label(lead.avatar.isEmpty ? "无头像可识别" : "识别头像里的文字",
+                          systemImage: "text.viewfinder")
+                }
+                .disabled(lead.avatar.isEmpty || ocrRunning)
+            }
+
             Section("评论原文") {
                 Text(lead.text).font(.body).textSelection(.enabled)
             }
-            if !lead.contact.isEmpty {
-                Section("联系方式") {
-                    HStack {
-                        Text(lead.contact).font(.body.monospaced()).textSelection(.enabled)
-                        Spacer()
-                        Button("复制") { UIPasteboard.general.string = lead.contact }
-                    }
-                }
-            }
+
             Section("来源") {
                 Text(lead.postTitle).font(.footnote)
                 if !lead.profileURL.isEmpty {
@@ -381,6 +512,71 @@ struct LeadDetail: View {
         }
         .navigationTitle("线索详情")
         .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $showScript) {
+            ScriptSheet(lead: lead, industry: industry, city: cityFilter)
+        }
+    }
+
+    private func runOCR() {
+        ocrRunning = true
+        Task {
+            let text = await AvatarOCR.recognize(
+                await AvatarOCR.download(lead.avatar) ?? UIImage())
+            let hits = BioParser.extract(text)
+            await MainActor.run {
+                ocrText = text.isEmpty ? "（未识别到文字）" : text
+                ocrContact = BioParser.best(hits) ?? ""
+                ocrRunning = false
+            }
+        }
+    }
+}
+
+// MARK: - 话术面板
+
+struct ScriptSheet: View {
+    let lead: Lead
+    let industry: String
+    let city: String
+    @Environment(\.dismiss) var dismiss
+    @State private var text: String = ""
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section("开场白") {
+                    TextEditor(text: $text)
+                        .frame(minHeight: 140)
+                        .font(.body)
+                }
+                Section("追问") {
+                    Text(ScriptGenerator.followUp(for: lead, industry: industry))
+                        .font(.footnote)
+                }
+                Section {
+                    Button {
+                        ContactActions.copy(text)
+                    } label: { Label("复制开场白", systemImage: "doc.on.doc") }
+                    if !lead.contact.isEmpty {
+                        Button {
+                            ContactActions.openWeChat(copying: lead.contact.components(separatedBy: ":").last ?? "")
+                        } label: { Label("复制并打开微信", systemImage: "message.fill") }
+                    }
+                }
+            }
+            .navigationTitle("话术")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("完成") { dismiss() }
+                }
+            }
+            .onAppear {
+                if text.isEmpty {
+                    text = ScriptGenerator.opening(for: lead, industry: industry, city: city)
+                }
+            }
+        }
     }
 }
 

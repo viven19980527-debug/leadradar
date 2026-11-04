@@ -18,6 +18,13 @@ struct Lead: Identifiable, Codable {
     var videoURL: String
     var createdAt: Int
 
+    // 富化字段（第一批）
+    var bio: String = ""          // 作者简介
+    var avatar: String = ""       // 头像 URL（OCR 用）
+    var city: String = ""         // IP 属地
+    var isQuestion: Bool = false  // 是否提问者
+    var ocrContact: String = ""   // 头像 OCR 出来的联系方式
+
     enum CodingKeys: String, CodingKey {
         case platform, uid, name, profileURL, text, comments, score, tags, contact, postTitle, videoURL, createdAt
     }
@@ -297,11 +304,24 @@ final class BiliClient: ObservableObject {
                         }
                         byAuthor[key] = old
                     } else {
-                        byAuthor[key] = Lead(platform: "bilibili", uid: c.uid, name: c.name,
-                                             profileURL: "https://space.bilibili.com/\(c.uid)",
-                                             text: c.text, comments: 1, score: sc, tags: tags,
-                                             contact: contact, postTitle: v.title,
-                                             videoURL: v.url, createdAt: 0)
+                        var lead = Lead(platform: "bilibili", uid: c.uid, name: c.name,
+                                        profileURL: "https://space.bilibili.com/\(c.uid)",
+                                        text: c.text, comments: 1, score: sc, tags: tags,
+                                        contact: contact, postTitle: v.title,
+                                        videoURL: v.url, createdAt: 0)
+                        lead.bio = c.bio
+                        lead.avatar = c.avatar
+                        lead.city = c.city
+                        lead.isQuestion = QuestionDetector.isQuestion(c.text)
+
+                        // B1：简介里的联系方式比评论里的更值钱
+                        let bioHits = BioParser.extract(c.bio)
+                        if let best = BioParser.best(bioHits) {
+                            lead.contact = best
+                            lead.score = min(100, lead.score + 25)
+                            if !lead.tags.contains("简介有联系方式") { lead.tags.append("简介有联系方式") }
+                        }
+                        byAuthor[key] = lead
                     }
                 }
                 leads = byAuthor.values.sorted { $0.score > $1.score }
@@ -314,7 +334,14 @@ final class BiliClient: ObservableObject {
         }
     }
 
-    private struct Cmt { let uid: String; let name: String; let text: String }
+    private struct Cmt {
+        let uid: String
+        let name: String
+        let text: String
+        var bio: String = ""
+        var avatar: String = ""
+        var city: String = ""
+    }
 
     private func comments(aid: String) async throws -> [Cmt] {
         var out: [Cmt] = []
@@ -326,7 +353,11 @@ final class BiliClient: ObservableObject {
             let mid = String((rp["mid"] as? Int) ?? ((rp["member"] as? [String: Any])?["mid"] as? Int) ?? 0)
             let name = (rp["member"] as? [String: Any])?["uname"] as? String ?? "匿名"
             let text = ((rp["content"] as? [String: Any])?["message"] as? String) ?? ""
-            out.append(Cmt(uid: mid, name: name, text: text))
+            let member = (rp["member"] as? [String: Any]) ?? [:]
+            let bio = (member["sign"] as? String) ?? ""
+            let avatar = (member["avatar"] as? String) ?? ""
+            let city = (member["location"] as? String) ?? ""
+            out.append(Cmt(uid: mid, name: name, text: text, bio: bio, avatar: avatar, city: city))
         }
 
         // 一级评论
