@@ -19,7 +19,7 @@ enum Platform: String, CaseIterable, Identifiable {
 
     var native: Bool { self == .bilibili }
 
-    /// houmen 协议桥认识的平台名（只支持这两个）
+    /// houmen 协议桥只认识这两个
     var houmenKey: String? {
         switch self {
         case .douyin: return "douyin"
@@ -28,20 +28,6 @@ enum Platform: String, CaseIterable, Identifiable {
         }
     }
 
-    /// 用 houmen 采集脚本的平台（抖音 / 小红书）
-    var usesHoumen: Bool { houmenKey != nil }
-
-    var protocolKey: String {
-        switch self {
-        case .douyin:   return "douyin"
-        case .xhs:      return "xhs"
-        case .weibo:    return "weibo"
-        case .kuaishou: return "kuaishou"
-        case .bilibili: return "bilibili"
-        }
-    }
-
-    /// 搜索页（houmen 脚本要求 /search/<关键词> 这种路径）
     func searchURL(_ kw: String) -> String {
         let e = kw.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? kw
         switch self {
@@ -53,7 +39,6 @@ enum Platform: String, CaseIterable, Identifiable {
         }
     }
 
-    /// 登录页（实测可用）
     var loginURL: String {
         switch self {
         case .douyin:   return "https://www.douyin.com/hot"
@@ -64,34 +49,44 @@ enum Platform: String, CaseIterable, Identifiable {
         }
     }
 
+    /// 搜索结果页里「作品详情」链接的选择器（按优先级）
+    var contentSelectors: String {
+        let list: [String]
+        switch self {
+        case .douyin:   list = ["a[href*='/video/']", "a[href*='modal_id=']"]
+        case .xhs:      list = ["a[href*='/explore/']", "a[href*='/search_result/']", ".note-item a"]
+        case .kuaishou: list = ["a[href*='/short-video/']", "a[href*='/profile/']", ".video-card a"]
+        case .weibo:    list = ["a[href*='/detail/']", "a[href*='/status/']", ".card a"]
+        default:        list = ["a[href*='/video/']"]
+        }
+    }
+
+    /// 评论节点选择器（DOM 兜底）
     var domSelectors: String {
         let list: [String]
         switch self {
         case .douyin:   list = ["[data-e2e='comment-item']", ".comment-item", "[class*='commentItem']"]
-        case .kuaishou: list = [".comment-item", "[class*='comment']"]
+        case .kuaishou: list = [".comment-item", "[class*='comment']", ".kwai-comment"]
         case .xhs:      list = [".comment-item", ".comment-inner", "[class*='commentItem']"]
-        case .weibo:    list = [".item-content", ".card .m-text-cut"]
+        case .weibo:    list = [".item-content", ".card .m-text-cut", ".comment"]
         default:        list = [".comment-item", ".reply-item"]
         }
-        return "[" + list.map { "'" + $0 + "'" }.joined(separator: ",") + "]"
     }
 }
 
-// MARK: - 用 houmen 脚本驱动的采集 WebView
+// MARK: - 采集器：直接进详情页 + 协议桥 + DOM 兜底
 
 struct HoumenCollector: UIViewRepresentable {
     let platform: Platform
     let keyword: String
     let target: Int
     var startURL: String? = nil
-    var drive: Bool = true                     // true=开始采集，false=只加载页面供登录
+    var drive: Bool = true
     @Binding var running: Bool
     let onBatch: ([Lead]) -> Void
     let onLog: (String) -> Void
 
-    func makeCoordinator() -> Coord {
-        Coord(self)
-    }
+    func makeCoordinator() -> Coord { Coord(self) }
 
     func makeUIView(context: Context) -> WKWebView {
         let cfg = WKWebViewConfiguration()
@@ -101,27 +96,22 @@ struct HoumenCollector: UIViewRepresentable {
         cfg.defaultWebpagePreferences.allowsContentJavaScript = true
         cfg.websiteDataStore = .default()
 
-        let key = platform.houmenKey ?? platform.rawValue
+        let key = platform.houmenKey ?? ""
         let taskId = "ldr-\(Int(Date().timeIntervalSince1970))"
+        context.coordinator.taskId = taskId
 
-        // 协议桥：注入初始任务，再注入拦截脚本（顺序不能反）
-        let bootstrap = """
-        window.__houmenProtocolInitialTask = { platform: "\(key)", taskId: "\(taskId)" };
-        """
-        uc.addUserScript(WKUserScript(source: bootstrap,
-                                      injectionTime: .atDocumentStart,
-                                      forMainFrameOnly: true))
-        uc.addUserScript(WKUserScript(source: HoumenJS.protocolCapture(),
-                                      injectionTime: .atDocumentStart,
-                                      forMainFrameOnly: false))
+        if !key.isEmpty {
+            let bootstrap = """
+            window.__houmenProtocolInitialTask = { platform: "\(key)", taskId: "\(taskId)" };
+            """
+            uc.addUserScript(WKUserScript(source: bootstrap,
+                                          injectionTime: .atDocumentStart,
+                                          forMainFrameOnly: true))
+            uc.addUserScript(WKUserScript(source: HoumenJS.protocolCapture(),
+                                          injectionTime: .atDocumentStart,
+                                          forMainFrameOnly: false))
+        }
 
-        // DOM 采集脚本
-        let collector = (platform == .xhs) ? HoumenJS.collectorXHS() : HoumenJS.collectorIOS()
-        uc.addUserScript(WKUserScript(source: collector,
-                                      injectionTime: .atDocumentEnd,
-                                      forMainFrameOnly: true))
-
-        // 登录模式下自动点「登录」按钮
         if startURL != nil {
             let autoClick = """
             (function(){
@@ -147,7 +137,6 @@ struct HoumenCollector: UIViewRepresentable {
         let wv = WKWebView(frame: .zero, configuration: cfg)
         wv.navigationDelegate = context.coordinator
         context.coordinator.webView = wv
-        context.coordinator.taskId = taskId
 
         if let url = URL(string: startURL ?? platform.searchURL(keyword)) {
             wv.load(URLRequest(url: url))
@@ -169,232 +158,233 @@ struct HoumenCollector: UIViewRepresentable {
         let parent: HoumenCollector
         weak var webView: WKWebView?
         var taskId = ""
+
         private var timer: Timer?
-        private var round = 0
+        private var ticks = 0
         private var seen = Set<String>()
         private var got = 0
-        private var phase = 0        // 0=准备搜索 1=滚动搜索 2=进详情 3=读评论
-        private var openedVideos = 0
+
+        private var links: [String] = []
+        private var linkIndex = -1
+        private var pageTicks = 0
+        private var finished = false
 
         init(_ p: HoumenCollector) { parent = p }
 
-        func stop() {
-            timer?.invalidate(); timer = nil
-        }
+        func stop() { timer?.invalidate(); timer = nil }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            if parent.startURL != nil {
-                parent.onLog("页面已加载（登录模式）")
-                return
-            }
-            parent.onLog("页面已加载，启动 houmen 采集器…")
-            startDriving()
-        }
-
-        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-            parent.onLog("加载失败：\(error.localizedDescription)")
-        }
-
-        private func startDriving() {
-            timer?.invalidate()
-            timer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
-                self?.tick()
+            guard parent.drive else { parent.onLog("页面已加载（登录模式）"); return }
+            if timer == nil {
+                parent.onLog("页面已加载，开始采集…")
+                timer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+                    self?.tick()
+                }
             }
         }
 
         private func js(_ code: String, _ done: @escaping (Any?) -> Void) {
             webView?.evaluateJavaScript(code) { result, err in
-                if let err = err {
-                    self.parent.onLog("JS 错误：\(err.localizedDescription)")
-                    done(nil); return
-                }
+                if err != nil { done(nil); return }
                 done(result)
             }
         }
 
-        private func callCollector(_ command: String, _ done: @escaping ([String: Any]?) -> Void) {
-            let fn = (parent.platform == .xhs) ? "collectXiaohongshuPage" : "collectAudioPage"
-            let kw = parent.keyword.replacingOccurrences(of: "\"", with: "\\\"")
+        // MARK: 主循环
+
+        private func tick() {
+            guard !finished else { return }
+            ticks += 1
+            if ticks > 120 || got >= parent.target { finish(); return }
+
+            if links.isEmpty && linkIndex < 0 {
+                // 阶段 A：找搜索结果里的作品链接
+                collectLinks { count in
+                    if count == 0 {
+                        if self.ticks > 6 {
+                            self.parent.onLog("没找到作品链接：请确认已登录、且页面是搜索结果页")
+                            self.finish()
+                        }
+                    } else {
+                        self.parent.onLog("找到 \(count) 个作品，开始逐个进详情")
+                        self.openNext()
+                    }
+                }
+                return
+            }
+
+            // 阶段 B：在详情页收数据
+            pageTicks += 1
+            scrollPage()
+            pollProtocol()
+            scrapeDOM()
+            if pageTicks >= 3 {
+                if got >= parent.target || linkIndex + 1 >= min(links.count, 8) {
+                    finish()
+                } else {
+                    openNext()
+                }
+            }
+        }
+
+        private func collectLinks(_ done: @escaping (Int) -> Void) {
+            let sels = parent.platform.contentSelectors
             let code = """
             (function(){
-              try {
-                if (typeof \(fn) !== 'function') return JSON.stringify({state:'blocked',message:'采集器未注入'});
-                return JSON.stringify(\(fn)({
-                  command: "\(command)",
-                  keyword: "\(kw)",
-                  maxCandidates: 20,
-                  maxComments: \(parent.target),
-                  sourceWindowDays: 7,
-                  industry: ""
-                }) || {});
-              } catch (e) { return JSON.stringify({state:'blocked',message:'JS异常:'+e}); }
+              var out=[], seen={}, sels=\(sels);
+              for (var i=0;i<sels.length;i++){
+                var nodes=document.querySelectorAll(sels[i]);
+                for (var j=0;j<nodes.length && out.length<40;j++){
+                  var h=nodes[j].getAttribute('href')||'';
+                  if(!h) continue;
+                  if(h.indexOf('http')!==0) h = location.origin + h;
+                  if(seen[h]) continue; seen[h]=1; out.push(h);
+                }
+                if(out.length>0) break;
+              }
+              return JSON.stringify(out);
             })();
             """
             js(code) { result in
                 guard let s = result as? String,
                       let d = s.data(using: .utf8),
-                      let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else {
-                    done(nil); return
+                      let arr = try? JSONSerialization.jsonObject(with: d) as? [String] else {
+                    done(0); return
                 }
-                done(obj)
+                self.links = arr
+                done(arr.count)
             }
         }
 
-        private func readProtocol(_ done: @escaping ([String: Any]?) -> Void) {
-            guard let key = parent.platform.houmenKey else { done(nil); return }
+        private func openNext() {
+            linkIndex += 1
+            pageTicks = 0
+            guard linkIndex < links.count else { finish(); return }
+            let url = links[linkIndex]
+            parent.onLog("进入详情 \(linkIndex + 1)/\(min(links.count, 8))：\(url.suffix(30))")
+            if let u = URL(string: url) { webView?.load(URLRequest(url: u)) }
+        }
+
+        private func scrollPage() {
+            let js = """
+            (function(){
+              var h = document.body.scrollHeight;
+              window.scrollTo(0, h*0.6);
+              setTimeout(function(){ window.scrollTo(0, document.body.scrollHeight); }, 700);
+              return 'ok';
+            })();
+            """
+            webView?.evaluateJavaScript(js, completionHandler: nil)
+        }
+
+        // MARK: 协议桥
+
+        private func pollProtocol() {
+            guard let key = parent.platform.houmenKey else { return }
             let code = """
             (function(){
               try {
                 if (!window.__houmenProtocol) return 'null';
                 return JSON.stringify(window.__houmenProtocol.read({
-                  platform: "\(key)",
-                  sourceUrl: location.href
+                  platform: "\(key)", sourceUrl: location.href
                 }) || {});
-              } catch (e) { return 'null'; }
+              } catch(e){ return 'null'; }
             })();
             """
             js(code) { result in
-                guard let s = result as? String, s != "null", s != "",
+                guard let s = result as? String, s != "null",
                       let d = s.data(using: .utf8),
-                      let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else {
-                    done(nil); return
-                }
-                done(obj)
+                      let page = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return }
+                let rows = (page["rows"] as? [[String: Any]])
+                    ?? (page["comments"] as? [[String: Any]]) ?? []
+                if !rows.isEmpty { self.parent.onLog("协议桥：\(rows.count) 条") }
+                self.handle(rows.map { r in
+                    (text: (r["text"] as? String) ?? "",
+                     uid: (r["userId"] as? String) ?? "",
+                     name: (r["name"] as? String) ?? "",
+                     bio: (r["bio"] as? String) ?? "",
+                     avatar: (r["avatar"] as? String) ?? "",
+                     city: (r["ipLocation"] as? String) ?? "",
+                     src: (r["sourceUrl"] as? String) ?? "")
+                })
             }
         }
 
-        private func tick() {
-            round += 1
-            if got >= parent.target || round > 90 {
-                finish(); return
-            }
+        // MARK: DOM 兜底
 
-            switch phase {
-            case 0:
-                callCollector("prepare_search") { st in
-                    guard let st = st else { return }
-                    let state = st["state"] as? String ?? ""
-                    if state == "blocked" {
-                        let msg = st["message"] as? String ?? "被拦截"
-                        self.parent.onLog("抖音/小红书：\(msg)")
-                        if (st["code"] as? String) == "login" {
-                            self.parent.onLog("需要登录：点左上角「① 登录页」")
-                            self.finish()
-                        } else {
-                            self.phase = 1     // 继续尝试滚动
-                        }
-                        return
-                    }
-                    if state == "ready" {
-                        self.parent.onLog("搜索页就绪（已确认最新排序）")
-                        self.phase = 1
-                    }
+        private func scrapeDOM() {
+            let js = """
+            (function(){
+              var sels=\(parent.platform.domSelectors), out=[];
+              for (var i=0;i<sels.length;i++){
+                var nodes=document.querySelectorAll(sels[i]);
+                for (var j=0;j<nodes.length && out.length<80;j++){
+                  var n=nodes[j];
+                  var r=n.getBoundingClientRect();
+                  if(r.width<=0||r.height<=0) continue;
+                  var t=(n.innerText||'').trim();
+                  if(t.length>4 && t.length<400) out.push(t);
                 }
-
-            case 1:
-                callCollector("search_advance") { st in
-                    guard let st = st else { return }
-                    let vids = (st["videos"] as? [[String: Any]]) ?? []
-                    if !vids.isEmpty {
-                        self.parent.onLog("搜索到 \(vids.count) 个候选视频")
-                        self.phase = 2
-                        self.openFirstVideo(vids)
-                    } else if (st["state"] as? String) == "blocked" {
-                        self.parent.onLog("搜索被拦截：\(st["message"] as? String ?? "")")
-                        self.finish()
-                    }
-                }
-
-            case 2:
-                // 进详情后读评论
-                readProtocol { page in
-                    self.collectRows(page)
-                }
-                self.drainComments()
-
-            case 3:
-                readProtocol { page in self.collectRows(page) }
-
-            default:
-                break
+                if(out.length>0) break;
+              }
+              return JSON.stringify(out);
+            })();
+            """
+            js(js) { _ in }
+            webView?.evaluateJavaScript(js) { [weak self] result, _ in
+                guard let self, let s = result as? String,
+                      let d = s.data(using: .utf8),
+                      let arr = try? JSONSerialization.jsonObject(with: d) as? [String] else { return }
+                if !arr.isEmpty { self.parent.onLog("DOM：\(arr.count) 条") }
+                self.handle(arr.map { (text: $0, uid: "", name: "", bio: "", avatar: "", city: "", src: "") })
             }
         }
 
-        private func openFirstVideo(_ vids: [[String: Any]]) {
-            guard openedVideos < 5 else { finish(); return }
-            guard let url = vids[min(openedVideos, vids.count - 1)]["sourceUrl"] as? String,
-                  !url.isEmpty else { finish(); return }
-            openedVideos += 1
-            parent.onLog("打开视频 \(openedVideos)：\(url.suffix(24))")
-            phase = 3
-            if let u = URL(string: url) {
-                webView?.load(URLRequest(url: u))
-            }
-        }
+        // MARK: 统一处理
 
-        /// 反复调用 read 命令让页面滚动加载评论，协议桥自动收集
-        private func drainComments() {
-            guard phase == 3 else { return }
-            callCollector("read") { _ in }
-            callCollector("advance") { _ in }
-        }
-
-        private func collectRows(_ page: [String: Any]?) {
-            guard let page = page else { return }
-            let rows = (page["rows"] as? [[String: Any]])
-                ?? (page["comments"] as? [[String: Any]])
-                ?? []
-
+        private func handle(_ items: [(text: String, uid: String, name: String, bio: String,
+                                       avatar: String, city: String, src: String)]) {
             var batch: [Lead] = []
-            for r in rows {
-                let text = (r["text"] as? String) ?? (r["content"] as? String) ?? ""
-                guard text.count >= 2 else { continue }
-                let id = (r["id"] as? String) ?? "\(text.prefix(24))"
-                if seen.contains(id) { continue }
-                seen.insert(id)
+            for it in items {
+                let text = it.text
+                guard text.count >= 4 else { continue }
+                let key = String(text.prefix(30))
+                if seen.contains(key) { continue }
+                seen.insert(key)
 
                 let (score, tags, contact) = RadarScorer.score(text, industry: "空调/家电")
                 guard score > 0 else { continue }
 
                 var lead = Lead(platform: parent.platform.rawValue,
-                                uid: (r["userId"] as? String) ?? id,
-                                name: (r["name"] as? String) ?? "匿名",
-                                profileURL: (r["profileUrl"] as? String) ?? "",
+                                uid: it.uid.isEmpty ? key : it.uid,
+                                name: it.name.isEmpty ? "匿名" : it.name,
+                                profileURL: "",
                                 text: text, comments: 1, score: score,
                                 tags: tags, contact: contact,
                                 postTitle: parent.keyword,
-                                videoURL: (r["sourceUrl"] as? String) ?? "",
+                                videoURL: it.src.isEmpty ? (webView?.url?.absoluteString ?? "") : it.src,
                                 createdAt: 0)
-                lead.bio = (r["bio"] as? String) ?? ""
-                lead.avatar = (r["avatar"] as? String) ?? ""
-                lead.city = (r["ipLocation"] as? String) ?? (r["city"] as? String) ?? ""
+                lead.bio = it.bio
+                lead.avatar = it.avatar
+                lead.city = it.city
                 lead.isQuestion = QuestionDetector.isQuestion(text)
 
-                if let best = BioParser.best(BioParser.extract(lead.bio)) {
+                if let best = BioParser.best(BioParser.extract(it.bio)) {
                     lead.contact = best
                     lead.score = min(100, lead.score + 25)
                     if !lead.tags.contains("简介有联系方式") { lead.tags.append("简介有联系方式") }
                 }
                 batch.append(lead)
             }
-
-            if !batch.isEmpty {
-                got += batch.count
-                parent.onLog("捕获 \(batch.count) 条（累计 \(got)）")
-                DispatchQueue.main.async { self.parent.onBatch(batch) }
-            }
-
-            if let paging = page["paging"] as? [String: Any],
-               let more = paging["hasMore"] as? Bool, more {
-                callCollector("advance") { _ in }
-            }
-            if page["endOfComments"] as? Bool == true {
-                parent.onLog("该视频评论已到底")
-                if openedVideos < 5 { phase = 1 } else { finish() }
-            }
+            guard !batch.isEmpty else { return }
+            got += batch.count
+            parent.onLog("累计 \(got) 条")
+            DispatchQueue.main.async { self.parent.onBatch(batch) }
         }
 
         private func finish() {
+            guard !finished else { return }
+            finished = true
             stop()
             DispatchQueue.main.async { self.parent.running = false }
             parent.onLog("采集结束，共 \(got) 条")

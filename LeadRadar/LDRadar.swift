@@ -219,21 +219,31 @@ final class BiliClient: ObservableObject {
         mixinKey = String((0..<32).map { arr[BiliClient.tab[$0]] })
     }
 
-    /// 生成带 wbi 签名的完整 URL（query 用 URLComponents 正确转义）
+    /// RFC3986 百分号编码（B站签名要求 space=%20）
+    private func pct(_ s: String) -> String {
+        var out = ""
+        for b in s.utf8 {
+            let c = Character(UnicodeScalar(b))
+            if (c >= "A" && c <= "Z") || (c >= "a" && c <= "z") || (c >= "0" && c <= "9")
+                || c == "-" || c == "." || c == "_" || c == "~" {
+                out.append(c)
+            } else {
+                out += String(format: "%%%02X", b)
+            }
+        }
+        return out
+    }
+
+    /// 生成带 wbi 签名的完整 URL
+    /// 关键：md5 的输入必须是「URL 编码后的 query」，否则中文关键词签名错误 → 返回 0 条
     private func signedURL(_ base: String, _ params: [String: String]) -> URL? {
         var p = params
         p["wts"] = String(Int(Date().timeIntervalSince1970))
-        let sorted = p.sorted { $0.key < $1.key }
+        let items = p.sorted { $0.key < $1.key }
             .map { ($0.key, $0.value.filter { !"!'()*".contains($0) }) }
-        // 签名用未转义的原始串
-        let raw = sorted.map { "\($0.0)=\($0.1)" }.joined(separator: "&")
-        let rid = md5(raw + mixinKey)
-
-        var comps = URLComponents(string: base)
-        var items = sorted.map { URLQueryItem(name: $0.0, value: $0.1) }
-        items.append(URLQueryItem(name: "w_rid", value: rid))
-        comps?.queryItems = items
-        return comps?.url
+        let query = items.map { "\($0.0)=\(pct($0.1))" }.joined(separator: "&")
+        let rid = md5(query + mixinKey)
+        return URL(string: base + "?" + query + "&w_rid=" + rid)
     }
 
     private func get(_ urlString: String) async throws -> [String: Any] {
