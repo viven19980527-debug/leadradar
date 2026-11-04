@@ -13,7 +13,8 @@ struct LeadRadarApp: App {
 struct RadarRoot: View {
     @StateObject var client = BiliClient()
 
-    @AppStorage("industry") var industry = "空调/家电"
+    // 行业词典已移除，固定使用通用词典
+    private var industry: String { "空调/家电" }
     @AppStorage("lastKeyword") var lastKeyword = ""
     @AppStorage("platforms") var platformsRaw = "bilibili"
 
@@ -208,15 +209,6 @@ struct RadarRoot: View {
 
     private var settingsSection: some View {
         Section("设置与导出") {
-            HStack {
-                Text("行业词典")
-                Spacer()
-                Picker("", selection: $industry) {
-                    Text("空调/家电").tag("空调/家电")
-                    Text("音响/影音").tag("音响/影音")
-                }
-                .pickerStyle(.menu)
-            }
             Stepper("目标条数：\(target)", value: $target, in: 20...300, step: 10)
             Button { showCSV = true } label: {
                 Label("导出 CSV（\(filtered.count) 条）", systemImage: "square.and.arrow.up")
@@ -374,7 +366,8 @@ struct LeadRow: View {
 struct LeadDetail: View {
     let lead: Lead
     @Environment(\.openURL) var openURL
-    @AppStorage("industry") var industry = "空调/家电"
+    // 行业词典已移除，固定使用通用词典
+    private var industry: String { "空调/家电" }
     @AppStorage("cityFilter") var cityFilter = ""
 
     @State private var ocrText: String = ""
@@ -616,8 +609,12 @@ struct WebCollectSheet: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     HStack(spacing: 12) {
-                        Button("登录") { useLogin = true; reloadKey = UUID() }
-                        Button("重新加载") { useLogin = false; reloadKey = UUID() }
+                        Button(useLogin ? "① 登录页" : "登录") {
+                            useLogin = true; reloadKey = UUID()
+                        }
+                        Button(useLogin ? "② 回到搜索页" : "刷新") {
+                            useLogin = false; reloadKey = UUID()
+                        }
                     }
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
@@ -666,11 +663,13 @@ struct WebCollectSheet: View {
                 Text("看到数据后点右上角「完成」，会自动进入下一个平台")
                     .font(.caption2).foregroundStyle(.secondary)
             } else {
-                Text("第 1 步：在下方页面登录（不登录大多看不到评论）")
+                Text("第 1 步：点左上角「登录」，在页面里扫码/账号登录")
                     .font(.caption).bold()
-                Text("第 2 步：点右上角「开始采集」")
+                Text("第 2 步：登录成功后点「回到搜索页」")
                     .font(.caption).bold()
-                Text("登录一次即长期有效，cookie 会保留。")
+                Text("第 3 步：点右上角「开始采集」")
+                    .font(.caption).bold()
+                Text("登录一次长期有效，cookie 会保存在 App 内。")
                     .font(.caption2).foregroundStyle(.secondary)
             }
         }

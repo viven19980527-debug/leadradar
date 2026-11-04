@@ -59,14 +59,23 @@ enum Platform: String, CaseIterable, Identifiable {
         return "[" + list.map { "'" + $0 + "'" }.joined(separator: ",") + "]"
     }
 
-    /// 该平台的登录页（放进内置浏览器让用户登）
+    /// 该平台的登录页（已逐个实测可用）
     var loginURL: String {
         switch self {
-        case .douyin:   return "https://www.douyin.com/"
-        case .kuaishou: return "https://www.kuaishou.com/"
-        case .xhs:      return "https://www.xiaohongshu.com/explore"
-        case .weibo:    return "https://passport.weibo.cn/signin/login"
-        case .bilibili: return "https://passport.bilibili.com/login"
+        case .douyin:
+            // 抖音 Web 无独立登录页，首页右上角有「登录」按钮，进页面后自动点它
+            return "https://www.douyin.com/"
+        case .kuaishou:
+            // 注意：www.kuaishou.com 会跳 m.kuaishou.com（无登录入口），必须用 passport
+            return "https://passport.kuaishou.com/pc/account/login"
+        case .xhs:
+            // /explore 只是信息流，/login 才是扫码登录
+            return "https://www.xiaohongshu.com/login"
+        case .weibo:
+            // 会 302 到 passport.weibo.com/sso/signin，实测可用
+            return "https://passport.weibo.cn/signin/login"
+        case .bilibili:
+            return "https://passport.bilibili.com/login"
         }
     }
 
@@ -127,6 +136,29 @@ struct WebGrabber: UIViewRepresentable {
         })();
         """
         uc.addUserScript(WKUserScript(source: hook, injectionTime: .atDocumentStart, forMainFrameOnly: false))
+
+        // 登录模式：加载完成后自动点击页面上的「登录」按钮（抖音/快手/小红书的登录入口都是 JS 弹层）
+        if startURL != nil {
+            let autoClick = """
+            (function(){
+              var tries = 0;
+              var t = setInterval(function(){
+                tries++;
+                if (tries > 20) { clearInterval(t); return; }
+                var texts = ['登录', '立即登录', '注册/登录', 'Login', 'Sign in', '扫码登录'];
+                var nodes = document.querySelectorAll('button, a, div[role=button], span');
+                for (var i=0;i<nodes.length;i++){
+                  var s = (nodes[i].innerText||'').trim();
+                  if (texts.indexOf(s) >= 0 && nodes[i].getBoundingClientRect().width > 0) {
+                    nodes[i].click(); clearInterval(t); return;
+                  }
+                }
+              }, 800);
+            })();
+            """
+            uc.addUserScript(WKUserScript(source: autoClick, injectionTime: .atDocumentEnd,
+                                          forMainFrameOnly: true))
+        }
 
         let wv = WKWebView(frame: .zero, configuration: cfg)
         wv.navigationDelegate = context.coordinator
